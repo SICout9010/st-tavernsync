@@ -27,6 +27,7 @@ export interface BaseState {
 export type ConflictChoice = 'local' | 'remote' | 'both';
 
 let sessionKey: CryptoKey | null = null;
+let sessionPassphrase: string | null = null;
 let generating = false;
 
 export function setGenerationBusy(busy: boolean): void {
@@ -49,8 +50,61 @@ export async function clearBase(): Promise<void> {
     await getSyncStore().removeItem(BASE_KEY);
 }
 
+/**
+ * E2EE salt must be per-account (shared), not per-device.
+ * Otherwise HMAC blob keys differ and pulls 404.
+ */
+export async function syncAccountSalt(passphrase?: string): Promise<void> {
+    const s = getSettings();
+    if (!s.e2eeEnabled) return;
+    if (!s.endpoint.trim() || !s.deviceToken.trim()) return;
+
+    const adapter = requireAdapter();
+    let localSalt = s.e2eeSalt;
+    if (!localSalt) {
+        // Need a salt to publish — create one if unlocking
+        if (!passphrase && !sessionPassphrase) return;
+        const { salt } = await deriveKey(passphrase || sessionPassphrase || '');
+        localSalt = encodeSalt(salt);
+        s.e2eeSalt = localSalt;
+        saveSettings();
+    }
+
+    const canonical = await adapter.ensureAccountSalt(localSalt);
+    if (canonical !== s.e2eeSalt) {
+        console.warn(LOG_PREFIX, 'Adopting account E2EE salt from server (was device-local)');
+        s.e2eeSalt = canonical;
+        saveSettings();
+        const pw = passphrase || sessionPassphrase;
+        if (pw) {
+            const { key } = await deriveKey(pw, decodeSalt(canonical));
+            sessionKey = key;
+        } else {
+            // Salt changed — force re-unlock
+            sessionKey = null;
+            console.warn(LOG_PREFIX, 'Re-unlock E2EE passphrase after adopting server salt');
+        }
+    }
+}
+
 export async function unlockE2ee(passphrase: string): Promise<void> {
     const s = getSettings();
+    sessionPassphrase = passphrase;
+
+    // Prefer account salt from server when available
+    if (s.endpoint.trim() && s.deviceToken.trim()) {
+        try {
+            const adapter = requireAdapter();
+            const { e2eeSalt } = await adapter.getAccount();
+            if (e2eeSalt) {
+                s.e2eeSalt = e2eeSalt;
+                saveSettings();
+            }
+        } catch (e) {
+            console.warn(LOG_PREFIX, 'Could not fetch account salt', e);
+        }
+    }
+
     let salt: Uint8Array;
     if (s.e2eeSalt) {
         salt = decodeSalt(s.e2eeSalt);
@@ -62,10 +116,17 @@ export async function unlockE2ee(passphrase: string): Promise<void> {
         s.e2eeSalt = encodeSalt(newSalt);
         saveSettings();
     }
+
+    try {
+        await syncAccountSalt(passphrase);
+    } catch (e) {
+        console.warn(LOG_PREFIX, 'syncAccountSalt after unlock failed', e);
+    }
 }
 
 export function lockE2ee(): void {
     sessionKey = null;
+    sessionPassphrase = null;
 }
 
 export function hasE2eeKey(): boolean {
@@ -105,6 +166,20 @@ async function blobStorageKey(plaintextHash: string): Promise<string> {
     const s = getSettings();
     if (!s.e2eeEnabled || !s.e2eeSalt) return plaintextHash;
     return hmacBlobKey(decodeSalt(s.e2eeSalt), plaintextHash);
+}
+
+/** Try HMAC key first (E2EE), then plaintext hash (legacy / non-E2EE uploads). */
+async function getRemoteBlob(adapter: HttpStorageAdapter, plaintextHash: string): Promise<Uint8Array> {
+    const key = await blobStorageKey(plaintextHash);
+    try {
+        return await adapter.getBlob(key);
+    } catch (e) {
+        if (key !== plaintextHash) {
+            console.warn(LOG_PREFIX, `Blob ${key} missing; trying plaintext hash ${plaintextHash}`);
+            return await adapter.getBlob(plaintextHash);
+        }
+        throw e;
+    }
 }
 
 async function maybeEncrypt(bytes: Uint8Array): Promise<Uint8Array> {
@@ -187,8 +262,7 @@ async function resolveChatConflict(
         // re-scan needed; treat as both
         return 'both';
     }
-    const remoteKey = await blobStorageKey(remoteHash);
-    const remoteBoxed = await adapter.getBlob(remoteKey);
+    const remoteBoxed = await getRemoteBlob(adapter, remoteHash);
     const remoteBytes = await maybeDecrypt(remoteBoxed, remoteHash);
     const localMsgs = decodeUtf8Jsonl(localBytes);
     const remoteMsgs = decodeUtf8Jsonl(remoteBytes);
@@ -215,6 +289,12 @@ export async function runSync(opts: SyncRunOptions): Promise<{ message: string }
     }
 
     const s = getSettings();
+    if (s.e2eeEnabled) {
+        await syncAccountSalt();
+        if (!sessionKey) {
+            throw new Error('E2EE enabled but passphrase not unlocked this session');
+        }
+    }
     const adapter = requireAdapter();
     const progress = (m: string) => {
         opts.onProgress?.(m);
@@ -255,8 +335,7 @@ export async function runSync(opts: SyncRunOptions): Promise<{ message: string }
             // Field-level merge attempt
             try {
                 const localBytes = await loadBlob(e.local.hash);
-                const remoteKey = await blobStorageKey(e.remote.hash);
-                const remoteBoxed = await adapter.getBlob(remoteKey);
+                const remoteBoxed = await getRemoteBlob(adapter, e.remote.hash);
                 const remoteBytes = await maybeDecrypt(remoteBoxed, e.remote.hash);
                 const localObj = JSON.parse(new TextDecoder().decode(localBytes!)) as Record<string, unknown>;
                 const remoteObj = JSON.parse(new TextDecoder().decode(remoteBytes)) as Record<string, unknown>;
@@ -319,8 +398,7 @@ export async function runSync(opts: SyncRunOptions): Promise<{ message: string }
             await uploadBlobsParallel(adapter, [{ hash: key, data }]);
         },
         pullAndApply: async (id, type, hash) => {
-            const key = await blobStorageKey(hash);
-            const boxed = await adapter.getBlob(key);
+            const boxed = await getRemoteBlob(adapter, hash);
             const plain = await maybeDecrypt(boxed, hash);
             await storeBlob(hash, plain);
             if (type === 'settings') {
@@ -346,8 +424,7 @@ export async function runSync(opts: SyncRunOptions): Promise<{ message: string }
             const entry = entries.find((x) => x.id === id);
             if (!entry?.remote) return;
             const sibling = conflictSiblingId(id, s.deviceName || 'remote');
-            const key = await blobStorageKey(entry.remote.hash);
-            const boxed = await adapter.getBlob(key);
+            const boxed = await getRemoteBlob(adapter, entry.remote.hash);
             const plain = await maybeDecrypt(boxed, entry.remote.hash);
             await storeBlob(entry.remote.hash, plain);
 
@@ -377,14 +454,35 @@ export async function runSync(opts: SyncRunOptions): Promise<{ message: string }
             if (e.action === 'push' || e.action === 'push_new') {
                 if (e.local) newItems[e.id] = e.local;
             }
+            if (e.action === 'pull' || e.action === 'pull_new') {
+                if (e.remote) newItems[e.id] = e.remote;
+            }
             if (e.action === 'local_delete' && s.propagateDeletes) {
                 delete newItems[e.id];
             }
         }
-        // After pulls, refresh local and use as truth for types we pulled
-        const after = await runScan();
-        for (const [id, item] of Object.entries(after.manifest.items)) {
-            if (allowed.has(item.type)) newItems[id] = item;
+
+        // Drop entries whose blobs are missing under both HMAC key and plaintext hash
+        const dropped: string[] = [];
+        for (const [id, item] of Object.entries(newItems)) {
+            const keyed = await blobStorageKey(item.hash);
+            const missing = await adapter.checkBlobs(
+                keyed === item.hash ? [item.hash] : [keyed, item.hash],
+            );
+            const hasBlob = keyed === item.hash
+                ? !missing.includes(item.hash)
+                : !(missing.includes(keyed) && missing.includes(item.hash));
+            if (!hasBlob) {
+                delete newItems[id];
+                dropped.push(id);
+            }
+        }
+        if (dropped.length) {
+            console.error(LOG_PREFIX, 'Dropping manifest entries with missing blobs', dropped);
+            toastr.warning(
+                `${dropped.length} item(s) not published — blob missing on server. Unlock + Push again.`,
+                'TavernSync',
+            );
         }
 
         const newManifest: Manifest = {

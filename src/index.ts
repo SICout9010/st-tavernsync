@@ -17,6 +17,7 @@ import {
     runScan,
     runSync,
     setGenerationBusy,
+    syncAccountSalt,
     unlockE2ee,
 } from './sync/engine';
 import { promptConflicts } from './ui/conflict';
@@ -99,6 +100,9 @@ async function handleConnect(): Promise<void> {
             endpoint: s.endpoint.trim(),
             deviceToken: s.deviceToken.trim(),
         });
+        if (s.e2eeEnabled && hasE2eeKey()) {
+            await syncAccountSalt();
+        }
         const { version } = await adapter.getManifest();
         const quota = await adapter.quota();
         $('#tavernsync_quota_line').text(

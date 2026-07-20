@@ -112,6 +112,39 @@ export class HttpStorageAdapter implements StorageAdapter {
         }
         return await res.json() as { usedBytes: number; limitBytes: number; itemCount: number };
     }
+
+    async getAccount(): Promise<{ e2eeSalt: string | null }> {
+        const res = await fetch(this.url('/v1/account'), {
+            headers: authHeaders(this.opts.deviceToken),
+        });
+        if (!res.ok) {
+            return { e2eeSalt: null };
+        }
+        return await res.json() as { e2eeSalt: string | null };
+    }
+
+    /** Publish account salt if empty; returns the canonical salt for this account. */
+    async ensureAccountSalt(localSalt: string): Promise<string> {
+        const current = await this.getAccount();
+        if (current.e2eeSalt) {
+            return current.e2eeSalt;
+        }
+        const res = await fetch(this.url('/v1/account'), {
+            method: 'PUT',
+            headers: authHeaders(this.opts.deviceToken),
+            body: JSON.stringify({ e2eeSalt: localSalt }),
+        });
+        if (res.status === 409) {
+            const body = await res.json() as { e2eeSalt?: string };
+            if (body.e2eeSalt) return body.e2eeSalt;
+        }
+        if (!res.ok) {
+            console.warn(LOG_PREFIX, 'ensureAccountSalt failed', res.status);
+            return localSalt;
+        }
+        const body = await res.json() as { e2eeSalt: string };
+        return body.e2eeSalt || localSalt;
+    }
 }
 
 /** Upload missing blobs with concurrency cap 4 + simple backoff. */

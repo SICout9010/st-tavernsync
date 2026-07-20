@@ -112,6 +112,18 @@ export default {
                 return withCors(await doStub(env, userId).fetch('https://do/quota', { method: 'GET' }));
             }
 
+            if (url.pathname === '/v1/account' && request.method === 'GET') {
+                return withCors(await doStub(env, userId).fetch('https://do/account', { method: 'GET' }));
+            }
+            if (url.pathname === '/v1/account' && request.method === 'PUT') {
+                const body = await request.text();
+                return withCors(await doStub(env, userId).fetch('https://do/account', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body,
+                }));
+            }
+
             if (url.pathname === '/v1/gc' && request.method === 'POST') {
                 return withCors(await doStub(env, userId).fetch('https://do/gc', {
                     method: 'POST',
@@ -204,6 +216,31 @@ export class ManifestDO {
                 limitBytes: limit,
                 itemCount: hashes.length,
             }), { headers: { 'Content-Type': 'application/json' } });
+        }
+
+        if (url.pathname === '/account' && request.method === 'GET') {
+            const e2eeSalt = (await this.state.storage.get<string>('e2eeSalt')) || null;
+            return new Response(JSON.stringify({ e2eeSalt }), {
+                headers: { 'Content-Type': 'application/json' },
+            });
+        }
+
+        if (url.pathname === '/account' && request.method === 'PUT') {
+            const body = await request.json() as { e2eeSalt?: string };
+            if (!body.e2eeSalt || typeof body.e2eeSalt !== 'string') {
+                return new Response(JSON.stringify({ error: 'e2eeSalt required' }), { status: 400 });
+            }
+            const existing = await this.state.storage.get<string>('e2eeSalt');
+            // First writer wins — all devices must share the same account salt for HMAC blob keys
+            if (existing && existing !== body.e2eeSalt) {
+                return new Response(JSON.stringify({ error: 'salt_exists', e2eeSalt: existing }), { status: 409 });
+            }
+            if (!existing) {
+                await this.state.storage.put('e2eeSalt', body.e2eeSalt);
+            }
+            return new Response(JSON.stringify({ e2eeSalt: existing || body.e2eeSalt }), {
+                headers: { 'Content-Type': 'application/json' },
+            });
         }
 
         if (url.pathname === '/gc' && request.method === 'POST') {

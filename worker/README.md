@@ -10,6 +10,7 @@
 | PUT | `/v1/blobs/{hash}` | R2 put `u/{userId}/b/{hash}` |
 | GET | `/v1/blobs/{hash}` | R2 get, immutable |
 | GET | `/v1/quota` | used / limit / itemCount |
+| GET/PUT | `/v1/account` | shared E2EE salt (`e2eeSalt`) for HMAC blob keys |
 | POST | `/v1/gc` | stub |
 
 Auth: `Authorization: Bearer <deviceToken>`. Map tokens → user ids in KV `USER_TOKENS`, or tokens ≥8 chars auto-map to `user_<prefix>` for self-host demos.
