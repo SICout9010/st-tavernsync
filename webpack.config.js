@@ -1,16 +1,19 @@
 import path from 'node:path';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import MiniCssExtractPlugin from 'mini-css-extract-plugin';
 import TerserPlugin from 'terser-webpack-plugin';
 
 const __dirname = import.meta.dirname ?? path.dirname(fileURLToPath(import.meta.url));
+const { version } = JSON.parse(readFileSync(path.join(__dirname, 'package.json'), 'utf8'));
 
 /** @type {import('webpack').Configuration} */
 export default {
     entry: path.join(__dirname, 'src/index.ts'),
     output: {
         path: path.join(__dirname, 'dist/'),
-        filename: 'index.js',
+        // Versioned filename busts SillyTavern / browser ES-module cache
+        filename: `index.${version}.js`,
         library: {
             type: 'module',
         },
@@ -42,7 +45,7 @@ export default {
     },
     plugins: [
         new MiniCssExtractPlugin({
-            filename: 'style.css',
+            filename: `style.${version}.css`,
         }),
     ],
     optimization: {

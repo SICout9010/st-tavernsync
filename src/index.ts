@@ -1,6 +1,7 @@
 import './style.css';
 import { HttpStorageAdapter } from './backend/http';
 import {
+    BUILD_ID,
     EXTENSION_FOLDER,
     LOG_PREFIX,
     ensureDeviceName,
@@ -456,7 +457,8 @@ jQuery(async () => {
         await renderSettingsPanel();
         registerSlashCommands();
         registerEventListeners();
-        console.log(LOG_PREFIX, 'loaded');
+        console.log(LOG_PREFIX, 'loaded', `build=${BUILD_ID}`);
+        toastr.info(`TavernSync build ${BUILD_ID} loaded`, 'TavernSync');
     } catch (e) {
         console.error(LOG_PREFIX, 'Failed to initialize', e);
         toastr.error('TavernSync failed to load. See console.', 'TavernSync');
