@@ -164,8 +164,14 @@
                     <div class="flex-container flexGap5 flexWrap">
                         <div id="tavernsync_rebuild_index" class="menu_button menu_button_icon">Rebuild local index</div>
                         <div id="tavernsync_view_log" class="menu_button menu_button_icon">View last sync log</div>
-                        <div id="tavernsync_reset_state" class="menu_button menu_button_icon">Reset sync state</div>
+                        <div id="tavernsync_reset_state" class="menu_button menu_button_icon">Reset local sync state</div>
+                        <div id="tavernsync_wipe_remote" class="menu_button menu_button_icon" title="Clears the remote manifest (not R2 orphans)">
+                            Wipe remote sync data
+                        </div>
                     </div>
+                    <small class="tavernsync-hint">
+                        If Pull fails with missing blobs, wipe remote on this panel, then Unlock → Push from the machine that has the real data.
+                    </small>
                 </div>
             </div>
 

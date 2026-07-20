@@ -4,7 +4,7 @@
 
 import { ConflictError } from '../backend/adapter';
 import { HttpStorageAdapter, uploadBlobsParallel } from '../backend/http';
-import { decodeSalt, deriveKey, encodeSalt, hmacBlobKey, open, seal } from '../crypto';
+import { decodeSalt, deriveKey, encodeSalt, open, seal } from '../crypto';
 import { LOG_PREFIX, getSettings, saveSettings, type SyncScopeSettings } from '../settings';
 import { loadBlob, loadLocalManifest, scanLocal, storeBlob } from '../st-adapter/scan';
 import { applyLocalItem, decodeUtf8Jsonl, parseItemId, writeChat } from '../st-adapter/write';
@@ -48,6 +48,20 @@ export async function saveBase(state: BaseState): Promise<void> {
 
 export async function clearBase(): Promise<void> {
     await getSyncStore().removeItem(BASE_KEY);
+}
+
+export async function wipeRemoteSyncData(): Promise<void> {
+    const s = getSettings();
+    const adapter = requireAdapter();
+    const { version } = await adapter.getManifest();
+    const empty = emptyManifest(s.deviceName || 'device', version);
+    empty.items = {};
+    const { version: next } = await adapter.putManifest(empty, version);
+    await saveBase({ manifest: empty, syncedAt: Date.now(), remoteVersion: next });
+    s.lastStatusMessage = 'Remote wiped';
+    s.lastItemCount = 0;
+    saveSettings();
+    console.log(LOG_PREFIX, 'Remote manifest wiped', { next });
 }
 
 /**
@@ -162,24 +176,23 @@ function requireAdapter(): HttpStorageAdapter {
     return new HttpStorageAdapter({ endpoint: s.endpoint.trim(), deviceToken: s.deviceToken.trim() });
 }
 
+/**
+ * R2 object key = plaintext content hash.
+ * Body may still be AES-GCM ciphertext when E2EE is on.
+ * (HMAC keys were dropped — per-device salts caused cross-device 404s.)
+ */
 async function blobStorageKey(plaintextHash: string): Promise<string> {
-    const s = getSettings();
-    if (!s.e2eeEnabled || !s.e2eeSalt) return plaintextHash;
-    return hmacBlobKey(decodeSalt(s.e2eeSalt), plaintextHash);
+    return plaintextHash;
 }
 
-/** Try HMAC key first (E2EE), then plaintext hash (legacy / non-E2EE uploads). */
 async function getRemoteBlob(adapter: HttpStorageAdapter, plaintextHash: string): Promise<Uint8Array> {
     const key = await blobStorageKey(plaintextHash);
-    try {
-        return await adapter.getBlob(key);
-    } catch (e) {
-        if (key !== plaintextHash) {
-            console.warn(LOG_PREFIX, `Blob ${key} missing; trying plaintext hash ${plaintextHash}`);
-            return await adapter.getBlob(plaintextHash);
-        }
-        throw e;
-    }
+    return adapter.getBlob(key);
+}
+
+function isBlobMissingError(e: unknown): boolean {
+    const msg = e instanceof Error ? e.message : String(e);
+    return /\b404\b/.test(msg) || /not.?found/i.test(msg);
 }
 
 async function maybeEncrypt(bytes: Uint8Array): Promise<Uint8Array> {
@@ -398,7 +411,20 @@ export async function runSync(opts: SyncRunOptions): Promise<{ message: string }
             await uploadBlobsParallel(adapter, [{ hash: key, data }]);
         },
         pullAndApply: async (id, type, hash) => {
-            const boxed = await getRemoteBlob(adapter, hash);
+            let boxed: Uint8Array;
+            try {
+                boxed = await getRemoteBlob(adapter, hash);
+            } catch (e) {
+                if (isBlobMissingError(e)) {
+                    console.error(LOG_PREFIX, `Skipping pull ${id}: blob ${hash} not on server`, e);
+                    toastr.warning(
+                        `Skipped ${id} — file missing on server. On the machine that has the data: Unlock → Push.`,
+                        'TavernSync',
+                    );
+                    return;
+                }
+                throw e;
+            }
             const plain = await maybeDecrypt(boxed, hash);
             await storeBlob(hash, plain);
             if (type === 'settings') {

@@ -19,6 +19,7 @@ import {
     setGenerationBusy,
     syncAccountSalt,
     unlockE2ee,
+    wipeRemoteSyncData,
 } from './sync/engine';
 import { promptConflicts } from './ui/conflict';
 
@@ -296,6 +297,26 @@ function bindSettingsHandlers(): void {
         toastr.info('See browser console logs prefixed [TavernSync].', 'TavernSync');
     });
     $(document).on('click', '#tavernsync_reset_state', () => { void handleResetState(); });
+    $(document).on('click', '#tavernsync_wipe_remote', () => { void handleWipeRemote(); });
+}
+
+async function handleWipeRemote(): Promise<void> {
+    if (!getSettings().endpoint.trim() || !getSettings().deviceToken.trim()) {
+        toastr.warning('Set endpoint and device token first.', 'TavernSync');
+        return;
+    }
+    const ok = window.confirm(
+        'Wipe the remote sync manifest?\n\nThis does not delete your local SillyTavern data.\nAfter wiping, Unlock → Push from the machine that has the correct data.',
+    );
+    if (!ok) return;
+    try {
+        await wipeRemoteSyncData();
+        setStatusLine('Remote wiped');
+        toastr.success('Remote sync data wiped. Push from your main machine next.', 'TavernSync');
+    } catch (e) {
+        console.error(LOG_PREFIX, e);
+        toastr.error(`Wipe failed: ${String(e)}`, 'TavernSync');
+    }
 }
 
 async function handleResetState(): Promise<void> {
