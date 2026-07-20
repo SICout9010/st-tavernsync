@@ -1,33 +1,72 @@
-# SillyTavern Extension Example
+# TavernSync
 
-*Provide a brief description of how your extension works, what problem it aims to solve.*
+[English](README_EN.md) · [สำหรับนักพัฒนา](README_DEV.md)
 
-## Features
+ซิงก์ตัวละคร แชท lorebook และการตั้งค่าของ SillyTavern ระหว่างเครื่องหลายเครื่อง — กดอัปโหลดจากเครื่องหนึ่ง แล้วดึงลงอีกเครื่อง แบบที่คุณควบคุมเอง
 
-*Describe some of the main selling points of your extension.*
+## เหมาะกับใคร
 
-## Installation and Usage
+ถ้าเข้า SillyTavern เครื่องเดียวจากมือถือ/คอมได้แล้ว (ผ่านเน็ตหรือ tunnel) **ไม่ต้องใช้ตัวนี้** ง่ายกว่าเยอะ
 
-### Installation
+ใช้ TavernSync เมื่อคุณมี SillyTavern แยกหลายเครื่องจริง ๆ เช่น โน้ตบุ๊กกับคอมบ้าน อยากพกแชทไปด้วยตอนออฟไลน์ หรือไม่อยากให้เรื่องราวไปอยู่บนเซิร์ฟเวอร์คนอื่นทั้งก้อน
 
-*In most cases, this should just be using ST's inbuilt extension installer.* 
+## ติดตั้ง
 
-### Usage
+ไม่ต้องติดตั้ง Node หรือรันคำสั่งแปลก ๆ — แค่ติดตั้ง extension แล้วเปิดใช้
 
-*Explain how to use this extension.*
+1. ใน SillyTavern ไปที่ **Extensions** → **Install extension**
+2. วางลิงก์นี้: `https://github.com/SICout9010/st-tavernsync`  
+   (ถ้ามีตัวเลือก **Install for all users** แนะนำเลือกอันนั้น)
+3. เปิดใช้ **TavernSync** ในรายการ extension
+4. เปิดแผงตั้งค่า Extensions (ฝั่งขวา) แล้วหาหัวข้อ **TavernSync**
 
-## Prerequisites
+## สิ่งที่ต้องกรอกในแผงตั้งค่า
 
-*Specify the version of ST necessary here.*
+ก่อนซิงก์ได้ คุณต้องมี “ที่เก็บกลาง” สำหรับข้อมูล (ดูหัวข้อถัดไป) แล้วกรอกประมาณนี้:
 
-## Support and Contributions
+| ช่อง | ใส่อะไร |
+|------|---------|
+| **Endpoint** | ลิงก์ของที่เก็บกลาง (เช่น URL ของ Worker ที่คุณ deploy ไว้) ไม่ต้องใส่ `/` ท้ายลิงก์ |
+| **Device name** | ชื่อเล่นของเครื่องนี้ เช่น `คอมบ้าน` หรือ `โน้ตบุ๊ก` — เครื่องอื่นตั้งชื่อคนละอัน |
+| **Device token** | รหัสลับที่เครื่องนี้ใช้คุยกับที่เก็บกลาง — เครื่องที่อยากซิงก์ด้วยกันใช้รหัสเดียวกัน |
 
-*Where should someone ask for support?*
+ถ้าเปิดการเข้ารหัส (ค่าเริ่มต้นเปิดอยู่):
 
-*Consider including your own contact info for help/questions.*
+1. คิด passphrase ที่จำได้ / เก็บไว้ที่ปลอดภัย
+2. ติ๊กยืนยันว่าเก็บไว้แล้ว
+3. กด **Unlock**
+4. กด **Connect** ให้แน่ใจว่าต่อได้
+5. กด **Rebuild local index** ครั้งแรก
+6. แล้วค่อย **Push** (ส่งขึ้น) หรือ **Pull** (ดึงลง)
 
-*How can people help add to this extension?*
+คำสั่งลัดในแชท: `/sync-status` · `/sync-push` · `/sync-pull`
 
-## License
+## ที่เก็บกลาง (backend)
 
-*Be cool, use an open source license.*
+TavernSync ไม่เก็บแชทของคุณไว้ในตัว extension — มันส่งไปที่เซิร์ฟเวอร์ที่คุณชี้เอง
+
+ตอนนี้มีตัวเลือกหลักคือรัน backend บน Cloudflare เอง (รายละเอียดอยู่ใน [`worker/`](worker/README.md) และ [คู่มือนักพัฒนา](README_DEV.md)) หรือใช้เซิร์ฟเวอร์ที่รองรับรูปแบบเดียวกันถ้ามีคนทำไว้ให้
+
+ถ้ายังไม่มี Endpoint การตั้งค่าใน SillyTavern ยังเปิดดูได้ แต่ปุ่ม Push / Pull จะยังใช้ไม่ได้
+
+## สิ่งสำคัญเรื่องความปลอดภัย
+
+- **คีย์ API ของโมเดลจะไม่ถูกซิงก์** — ตั้งใจตัดออกอยู่แล้ว
+- การเข้ารหัสต้นทางถึงปลายทางช่วยกันไม่ให้คนดูเซิร์ฟเวอร์อ่านเนื้อหาแชทของคุณได้ง่าย ๆ แต่ **ถ้าทำ passphrase หาย ข้อมูลบนที่เก็บกลางกู้ยากมาก**
+- รหัส device token อยู่ในเครื่องคุณ — อย่าแชร์ในที่สาธารณะ
+- ปุ่มลบข้อมูลแบบส่งต่อไปเครื่องอื่น **ปิดไว้เป็นค่าเริ่มต้น** (อันตรายถ้าเปิดโดยไม่ตั้งใจ)
+
+## ถ้าพัง / อยากย้อนกลับ
+
+1. ก่อน Pull ครั้งใหญ่ สำรองโฟลเดอร์ข้อมูล SillyTavern ในเครื่องไว้ก่อน
+2. ทำ passphrase หาย → พึ่งแบ็กอัปในเครื่อง ไม่พึ่งของบนเซิร์ฟเวอร์อย่างเดียว
+3. **Reset sync state** แค่ล้างสถานะซิงก์ในเบราว์เซอร์ ไม่ลบตัวละคร/แชทใน SillyTavern
+4. หลังดึงการตั้งค่าลงมา ถ้าขึ้นให้รีโหลดหน้า — กดรีโหลดได้เลย
+
+## ใบอนุญาต
+
+[AGPLv3](LICENSE)
+
+---
+
+เขียนโค้ด / แก้บั๊ก / deploy backend? ไปที่ [README_DEV.md](README_DEV.md)

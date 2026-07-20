@@ -1,11 +1,17 @@
 {
-    "display_name": "Name Displayed in SillyTavern",
-    "loading_order": 9,
+    "display_name": "TavernSync",
+    "loading_order": 100,
     "requires": [],
     "optional": [],
-    "js": "index.js",
-    "css": "style.css",
-    "author": "yourNameHere",
-    "version": "1.0.0",
-    "homePage": "yourUrlHere"
+    "js": "dist/index.js",
+    "css": "dist/style.css",
+    "author": "SICout9010",
+    "version": "0.1.0",
+    "homePage": "https://github.com/SICout9010/st-tavernsync",
+    "auto_update": true,
+    "hooks": {
+        "activate": "onActivate",
+        "install": "onInstall",
+        "clean": "onClean"
+    }
 }

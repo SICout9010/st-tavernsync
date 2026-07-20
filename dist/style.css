@@ -1,0 +1,28 @@
+/* TavernSync settings panel */
+
+.tavernsync-settings .tavernsync-status-line {
+    margin-left: 0.5em;
+    font-weight: normal;
+    font-size: 0.9em;
+    opacity: 0.85;
+    cursor: pointer;
+}
+
+.tavernsync-settings .tavernsync-hint {
+    display: block;
+    opacity: 0.8;
+    margin-bottom: 0.5em;
+}
+
+.tavernsync-settings .flexGap5 {
+    gap: 5px;
+}
+
+.tavernsync-settings .flexWrap {
+    flex-wrap: wrap;
+}
+
+.tavernsync-settings .checkbox_label {
+    margin-right: 0.75em;
+}
+

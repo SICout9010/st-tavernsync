@@ -1,0 +1,174 @@
+<div class="tavernsync-settings" id="tavernsync_settings_root">
+    <div class="inline-drawer">
+        <div class="inline-drawer-toggle inline-drawer-header">
+            <b>TavernSync</b>
+            <span class="tavernsync-status-line" id="tavernsync_status_line" title="Click for details">● Never synced</span>
+            <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+        </div>
+        <div class="inline-drawer-content">
+
+            <small class="tavernsync-hint">
+                Cross-device sync for local-first SillyTavern installs. ซิงข้อมูล SillyTavern ระหว่างอุปกรณ์ต่างๆ by SICout9010
+            </small>
+
+            <hr class="sysHR" />
+
+            <div class="flex-container flexGap5 alignItemsCenter flexWrap">
+                <label for="tavernsync_backend_mode"><b>Backend</b></label>
+                <select id="tavernsync_backend_mode" class="text_pole flex1">
+                    <option value="custom">Custom (bring your own)</option>
+                    <option value="managed">Managed</option>
+                </select>
+            </div>
+
+            <label for="tavernsync_endpoint"><b>Endpoint</b></label>
+            <div class="flex-container flexGap5 alignItemsCenter">
+                <input id="tavernsync_endpoint" class="text_pole flex1" type="url" autocomplete="off"
+                    placeholder="https://sync.example.com" />
+                <div id="tavernsync_connect" class="menu_button menu_button_icon" title="Connect (stub)">
+                    Connect
+                </div>
+            </div>
+
+            <label for="tavernsync_device_name"><b>Device name</b></label>
+            <input id="tavernsync_device_name" class="text_pole" type="text" autocomplete="off"
+                placeholder="desktop-main" />
+
+            <label for="tavernsync_device_token"><b>Device token</b></label>
+            <input id="tavernsync_device_token" class="text_pole" type="password" autocomplete="off"
+                placeholder="Bearer token for sync backend" />
+            <small class="tavernsync-hint">Stored in extension settings (plaintext). Prefer a dedicated sync token, not your ST password.</small>
+
+            <div id="tavernsync_quota_line" class="tavernsync-hint">Quota: —</div>
+
+            <hr class="sysHR" />
+
+            <div class="flex-container flexGap5 flexWrap">
+                <div id="tavernsync_push" class="menu_button menu_button_icon" title="Push local → remote">
+                    ↑ Push
+                </div>
+                <div id="tavernsync_pull" class="menu_button menu_button_icon" title="Pull remote → local">
+                    ↓ Pull
+                </div>
+                <div id="tavernsync_status_btn" class="menu_button menu_button_icon" title="Show sync status">
+                    ⟳ Status
+                </div>
+            </div>
+
+            <hr class="sysHR" />
+
+            <div class="inline-drawer">
+                <div class="inline-drawer-toggle inline-drawer-header">
+                    <b>Sync scope</b>
+                    <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+                </div>
+                <div class="inline-drawer-content">
+                    <div class="flex-container flexWrap flexGap5">
+                        <label class="checkbox_label" for="tavernsync_scope_settings">
+                            <input id="tavernsync_scope_settings" type="checkbox" />
+                            <span>Settings</span>
+                        </label>
+                        <label class="checkbox_label" for="tavernsync_scope_characters">
+                            <input id="tavernsync_scope_characters" type="checkbox" />
+                            <span>Characters</span>
+                        </label>
+                        <label class="checkbox_label" for="tavernsync_scope_chats">
+                            <input id="tavernsync_scope_chats" type="checkbox" />
+                            <span>Chats</span>
+                        </label>
+                        <label class="checkbox_label" for="tavernsync_scope_lorebooks">
+                            <input id="tavernsync_scope_lorebooks" type="checkbox" />
+                            <span>Lorebooks</span>
+                        </label>
+                        <label class="checkbox_label" for="tavernsync_scope_presets">
+                            <input id="tavernsync_scope_presets" type="checkbox" />
+                            <span>Presets</span>
+                        </label>
+                        <label class="checkbox_label" for="tavernsync_scope_personas">
+                            <input id="tavernsync_scope_personas" type="checkbox" />
+                            <span>Personas</span>
+                        </label>
+                        <label class="checkbox_label" for="tavernsync_scope_groups">
+                            <input id="tavernsync_scope_groups" type="checkbox" />
+                            <span>Groups</span>
+                        </label>
+                        <label class="checkbox_label" for="tavernsync_scope_quickreplies">
+                            <input id="tavernsync_scope_quickreplies" type="checkbox" />
+                            <span>Quick replies</span>
+                        </label>
+                        <label class="checkbox_label" for="tavernsync_scope_themes">
+                            <input id="tavernsync_scope_themes" type="checkbox" />
+                            <span>Themes</span>
+                        </label>
+                    </div>
+                </div>
+            </div>
+
+            <div class="inline-drawer">
+                <div class="inline-drawer-toggle inline-drawer-header">
+                    <b>Auto-sync</b>
+                    <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+                </div>
+                <div class="inline-drawer-content">
+                    <label class="checkbox_label" for="tavernsync_auto_startup">
+                        <input id="tavernsync_auto_startup" type="checkbox" />
+                        <span>On startup</span>
+                    </label>
+                    <label class="checkbox_label" for="tavernsync_auto_chat_close">
+                        <input id="tavernsync_auto_chat_close" type="checkbox" />
+                        <span>After chat closes</span>
+                    </label>
+                    <label class="checkbox_label" for="tavernsync_propagate_deletes">
+                        <input id="tavernsync_propagate_deletes" type="checkbox" />
+                        <span>Propagate deletions (danger)</span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="inline-drawer">
+                <div class="inline-drawer-toggle inline-drawer-header">
+                    <b>Encryption</b>
+                    <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+                </div>
+                <div class="inline-drawer-content">
+                    <label class="checkbox_label" for="tavernsync_e2ee">
+                        <input id="tavernsync_e2ee" type="checkbox" />
+                        <span>End-to-end encryption</span>
+                    </label>
+                    <label for="tavernsync_passphrase"><b>Passphrase</b> (session unlock)</label>
+                    <div class="flex-container flexGap5 alignItemsCenter">
+                        <input id="tavernsync_passphrase" class="text_pole flex1" type="password" autocomplete="off"
+                            placeholder="Not stored — unlock each session" />
+                        <div id="tavernsync_unlock_e2ee" class="menu_button menu_button_icon">Unlock</div>
+                    </div>
+                    <label class="checkbox_label" for="tavernsync_recovery_ack">
+                        <input id="tavernsync_recovery_ack" type="checkbox" />
+                        <span>I've saved my recovery phrase</span>
+                    </label>
+                    <div id="tavernsync_change_passphrase" class="menu_button menu_button_icon">
+                        Lock session key
+                    </div>
+                    <small class="tavernsync-hint">
+                        E2EE protects against the server operator and network, not other extensions on this browser profile.
+                        Losing the passphrase means losing synced data.
+                    </small>
+                </div>
+            </div>
+
+            <div class="inline-drawer">
+                <div class="inline-drawer-toggle inline-drawer-header">
+                    <b>Advanced</b>
+                    <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+                </div>
+                <div class="inline-drawer-content">
+                    <div class="flex-container flexGap5 flexWrap">
+                        <div id="tavernsync_rebuild_index" class="menu_button menu_button_icon">Rebuild local index</div>
+                        <div id="tavernsync_view_log" class="menu_button menu_button_icon">View last sync log</div>
+                        <div id="tavernsync_reset_state" class="menu_button menu_button_icon">Reset sync state</div>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </div>
+</div>

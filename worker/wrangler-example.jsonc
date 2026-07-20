@@ -1,0 +1,45 @@
+{
+  // Copy this file to wrangler.jsonc and fill in your own values:
+  //   cp wrangler-example.jsonc wrangler.jsonc
+  //
+  // wrangler.jsonc is gitignored — do not commit real KV/R2 account ids.
+  //
+  // Create resources:
+  //   npx wrangler kv namespace create USER_TOKENS
+  //   (create R2 bucket in dashboard or: npx wrangler r2 bucket create tavernsync-blobs)
+
+  "name": "tavernsync-worker",
+  "main": "src/index.ts",
+  "compatibility_date": "2024-11-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "DEFAULT_QUOTA_BYTES": "524288000"
+  },
+  "r2_buckets": [
+    {
+      "binding": "BLOBS",
+      "bucket_name": "tavernsync-blobs"
+    }
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "USER_TOKENS",
+      "id": "YOUR_KV_NAMESPACE_ID_HERE"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "MANIFEST_DO",
+        "class_name": "ManifestDO"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      // Free plan / new accounts: SQLite-backed DOs only (not new_classes)
+      "new_sqlite_classes": ["ManifestDO"]
+    }
+  ]
+}
