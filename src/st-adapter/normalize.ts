@@ -107,11 +107,13 @@ export function stripSettingsForSync(settings: Record<string, unknown>): Record<
         stripSecretsDeep(ext);
     }
 
-    // power_user often holds UI scale / theme path — keep content prefs, drop URLs
+    // Persona names/descriptions sync as persona/* items (with avatar images)
     if (isPlainObject(clone.power_user)) {
         const pu = clone.power_user as Record<string, unknown>;
+        delete pu.personas;
+        delete pu.persona_descriptions;
+        delete pu.default_persona;
         delete pu.waifuMode;
-        // keep most; strip secret-like
         stripSecretsDeep(pu);
     }
 

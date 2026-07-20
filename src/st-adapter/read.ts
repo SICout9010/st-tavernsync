@@ -354,50 +354,75 @@ export async function listGroups(): Promise<{
     return { groups: groupItems, groupChats: groupChatItems };
 }
 
-/** Personas live in settings (power_user.personas / similar). Export as separate items when present. */
+export interface PersonaPayload {
+    avatarId: string;
+    name: string;
+    description: Record<string, unknown> | null;
+    /** Raw avatar image as base64 (no data: prefix). May be empty if file missing. */
+    imageBase64: string;
+}
+
+/** Personas = avatar file under User Avatars/ + power_user.personas / persona_descriptions. */
 export async function listPersonas(settings: Record<string, unknown>): Promise<{ item: SyncItem; bytes: Uint8Array }[]> {
     const out: { item: SyncItem; bytes: Uint8Array }[] = [];
     const power = settings.power_user as Record<string, unknown> | undefined;
-    const personas = (power?.personas || settings.personas) as Record<string, unknown> | unknown[] | undefined;
+    const personas = (power?.personas || settings.personas) as Record<string, unknown> | undefined;
+    const descriptions = (power?.persona_descriptions || {}) as Record<string, Record<string, unknown>>;
 
-    if (Array.isArray(personas)) {
-        for (const p of personas) {
-            if (!p || typeof p !== 'object') continue;
-            const avatar = String((p as { avatar?: string }).avatar || (p as { name?: string }).name || '');
-            if (!avatar) continue;
-            const json = canonicalJson(p);
-            const bytes = new TextEncoder().encode(json);
-            const hash = await sha256Hex(bytes);
-            out.push({
-                item: {
-                    id: `persona/${avatar}`,
-                    type: 'persona',
-                    hash,
-                    size: bytes.byteLength,
-                    mtime: Date.now(),
-                },
-                bytes,
-            });
+    if (!personas || typeof personas !== 'object' || Array.isArray(personas)) {
+        return out;
+    }
+
+    for (const [avatarId, nameVal] of Object.entries(personas)) {
+        if (!avatarId) continue;
+        const name = typeof nameVal === 'string' ? nameVal : String(nameVal ?? avatarId);
+        const description = descriptions[avatarId] ? structuredClone(descriptions[avatarId]) : null;
+
+        let imageBase64 = '';
+        try {
+            const imgBytes = await stFetchBytes(
+                `/User%20Avatars/${encodeURIComponent(avatarId)}`,
+            );
+            imageBase64 = uint8ToBase64(imgBytes);
+        } catch {
+            // Persona metadata can exist without a file (or default avatar)
         }
-    } else if (personas && typeof personas === 'object') {
-        for (const [key, p] of Object.entries(personas)) {
-            const json = canonicalJson(p);
-            const bytes = new TextEncoder().encode(json);
-            const hash = await sha256Hex(bytes);
-            out.push({
-                item: {
-                    id: `persona/${key}`,
-                    type: 'persona',
-                    hash,
-                    size: bytes.byteLength,
-                    mtime: Date.now(),
-                },
-                bytes,
-            });
-        }
+
+        const payload: PersonaPayload = { avatarId, name, description, imageBase64 };
+        const json = canonicalJson(payload);
+        const bytes = new TextEncoder().encode(json);
+        const hash = await sha256Hex(bytes);
+        out.push({
+            item: {
+                id: `persona/${avatarId}`,
+                type: 'persona',
+                hash,
+                size: bytes.byteLength,
+                mtime: Date.now(),
+            },
+            bytes,
+        });
     }
     return out;
 }
+
+function uint8ToBase64(bytes: Uint8Array): string {
+    let binary = '';
+    const chunk = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunk) {
+        binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+    }
+    return btoa(binary);
+}
+
+function base64ToUint8(b64: string): Uint8Array {
+    const binary = atob(b64);
+    const out = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i);
+    return out;
+}
+
+export { base64ToUint8 };
 
 // Re-export for apply paths
 export { canonicalizeJsonl, canonicalJson, sha256Hex };

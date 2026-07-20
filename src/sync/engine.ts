@@ -397,6 +397,7 @@ export async function runSync(opts: SyncRunOptions): Promise<{ message: string }
     progress(`Plan: ${plan.length} ops`);
 
     let settingsChanged = false;
+    let personasChanged = false;
 
     await applyOp(plan, {
         dryRun: !!opts.dryRun,
@@ -443,6 +444,7 @@ export async function runSync(opts: SyncRunOptions): Promise<{ message: string }
                     ?? getSettings();
                 await applyLocalItem(id, type, new TextEncoder().encode(JSON.stringify(merged)), !!opts.dryRun);
             } else {
+                if (type === 'persona') personasChanged = true;
                 await applyLocalItem(id, type, plain, !!opts.dryRun);
             }
         },
@@ -542,10 +544,15 @@ export async function runSync(opts: SyncRunOptions): Promise<{ message: string }
     s.lastStatusMessage = message;
     saveSettings();
 
-    if (settingsChanged) {
-        toastr.info('Settings were pulled. Reload recommended.', 'TavernSync');
+    if (settingsChanged || personasChanged) {
+        const what = settingsChanged && personasChanged
+            ? 'Settings and personas'
+            : settingsChanged
+                ? 'Settings'
+                : 'Personas';
+        toastr.info(`${what} were pulled. Reload recommended.`, 'TavernSync');
         // Soft prompt — don't force
-        if (confirm('TavernSync pulled settings. Reload the page now?')) {
+        if (confirm(`TavernSync pulled ${what.toLowerCase()}. Reload the page now?`)) {
             location.reload();
         }
     }

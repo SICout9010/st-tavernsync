@@ -1,7 +1,7 @@
 {
   "name": "st-tavernsync",
   "type": "module",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "private": true,
   "description": "SillyTavern cross-device sync extension (TavernSync)",
   "scripts": {

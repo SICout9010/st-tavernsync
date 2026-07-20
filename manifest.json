@@ -3,10 +3,10 @@
     "loading_order": 100,
     "requires": [],
     "optional": [],
-    "js": "dist/index.0.1.2.js",
-    "css": "dist/style.0.1.2.css",
+    "js": "dist/index.0.1.3.js",
+    "css": "dist/style.0.1.3.css",
     "author": "SICout9010",
-    "version": "0.1.2",
+    "version": "0.1.3",
     "homePage": "https://github.com/SICout9010/st-tavernsync",
     "auto_update": true,
     "hooks": {

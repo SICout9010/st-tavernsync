@@ -3,7 +3,7 @@
 export const LOG_PREFIX = '[TavernSync]';
 export const MODULE_NAME = 'tavernsync';
 /** Bump with package.json / manifest when releasing — logged on load so you can confirm cache bust. */
-export const BUILD_ID = '0.1.2';
+export const BUILD_ID = '0.1.3';
 
 /** Folder name under scripts/extensions/ when installed (third-party or system). */
 export const EXTENSION_FOLDER = 'third-party/st-tavernsync';
