@@ -133,23 +133,33 @@
                 <div class="inline-drawer-content">
                     <label class="checkbox_label" for="tavernsync_e2ee">
                         <input id="tavernsync_e2ee" type="checkbox" />
-                        <span>End-to-end encryption</span>
+                        <span>End-to-end encryption (recommended)</span>
                     </label>
-                    <label for="tavernsync_passphrase"><b>Passphrase</b> (session unlock)</label>
-                    <div class="flex-container flexGap5 alignItemsCenter">
-                        <input id="tavernsync_passphrase" class="text_pole flex1" type="password" autocomplete="off"
-                            placeholder="Not stored — unlock each session" />
-                        <div id="tavernsync_unlock_e2ee" class="menu_button menu_button_icon">Unlock</div>
+                    <div id="tavernsync_e2ee_status" class="tavernsync-hint">E2EE: —</div>
+
+                    <div id="tavernsync_e2ee_setup">
+                        <label for="tavernsync_passphrase"><b>Passphrase</b></label>
+                        <div class="flex-container flexGap5 alignItemsCenter">
+                            <input id="tavernsync_passphrase" class="text_pole flex1" type="password" autocomplete="off"
+                                placeholder="Set once per device" />
+                            <div id="tavernsync_unlock_e2ee" class="menu_button menu_button_icon">Unlock device</div>
+                        </div>
+                        <label class="checkbox_label" for="tavernsync_recovery_ack">
+                            <input id="tavernsync_recovery_ack" type="checkbox" />
+                            <span>I've saved my recovery phrase</span>
+                        </label>
                     </div>
-                    <label class="checkbox_label" for="tavernsync_recovery_ack">
-                        <input id="tavernsync_recovery_ack" type="checkbox" />
-                        <span>I've saved my recovery phrase</span>
+
+                    <label class="checkbox_label" for="tavernsync_e2ee_session">
+                        <input id="tavernsync_e2ee_session" type="checkbox" />
+                        <span>Require passphrase every page load (paranoid)</span>
                     </label>
                     <div id="tavernsync_change_passphrase" class="menu_button menu_button_icon">
-                        Lock session key
+                        Lock this device
                     </div>
                     <small class="tavernsync-hint">
-                        E2EE protects against the server operator and network, not other extensions on this browser profile.
+                        Default: unlock once; we remember the derived key on this browser (not the passphrase).
+                        E2EE protects against the server/network — not other extensions on this profile.
                         Losing the passphrase means losing synced data.
                     </small>
                 </div>
@@ -170,7 +180,8 @@
                         </div>
                     </div>
                     <small class="tavernsync-hint">
-                        If Pull fails with missing blobs, wipe remote on this panel, then Unlock → Push from the machine that has the real data.
+                        If Pull fails with missing blobs, wipe remote here, then Push from the machine that has the real data
+                        (unlock that device once if needed).
                     </small>
                 </div>
             </div>

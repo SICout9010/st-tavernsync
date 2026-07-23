@@ -12,13 +12,16 @@ import {
 import { getSyncStore } from './state/store';
 import {
     clearBase,
+    forgetRememberedE2eeKey,
     getStatusDiff,
     hasE2eeKey,
     lockE2ee,
+    rememberCurrentE2eeKey,
     runScan,
     runSync,
     setGenerationBusy,
     syncAccountSalt,
+    tryRestoreE2eeKey,
     unlockE2ee,
     wipeRemoteSyncData,
 } from './sync/engine';
@@ -32,6 +35,35 @@ function setStatusLine(text: string): void {
     const el = document.getElementById('tavernsync_status_line');
     if (el) {
         el.textContent = text.startsWith('●') ? text : `● ${text}`;
+    }
+}
+
+function updateE2eeUi(): void {
+    const s = getSettings();
+    const unlocked = hasE2eeKey();
+    const $status = $('#tavernsync_e2ee_status');
+    const $setup = $('#tavernsync_e2ee_setup');
+
+    if (!s.e2eeEnabled) {
+        $status.text('E2EE: off');
+        $setup.hide();
+        return;
+    }
+
+    if (unlocked) {
+        $status.text(
+            s.e2eeRequireSessionUnlock
+                ? 'E2EE: unlocked this session'
+                : 'E2EE: unlocked · this device remembered',
+        );
+        $setup.hide();
+    } else {
+        $status.text(
+            s.e2eeRequireSessionUnlock
+                ? 'E2EE: locked — enter passphrase this session'
+                : 'E2EE: locked — enter passphrase once on this device',
+        );
+        $setup.show();
     }
 }
 
@@ -68,12 +100,14 @@ function hydrateSettingsUI(): void {
     $('#tavernsync_auto_chat_close').prop('checked', s.autoSyncOnChatClose);
     $('#tavernsync_propagate_deletes').prop('checked', s.propagateDeletes);
     $('#tavernsync_e2ee').prop('checked', s.e2eeEnabled);
+    $('#tavernsync_e2ee_session').prop('checked', s.e2eeRequireSessionUnlock);
 
     setStatusLine(
         s.lastItemCount
             ? `${s.lastStatusMessage} · ${s.lastItemCount} items`
             : s.lastStatusMessage || 'Never synced',
     );
+    updateE2eeUi();
 }
 
 function bindScopeCheckbox(id: string, key: keyof SyncScopeSettings): void {
@@ -83,11 +117,22 @@ function bindScopeCheckbox(id: string, key: keyof SyncScopeSettings): void {
     });
 }
 
-function ensureE2eeReady(): boolean {
+async function ensureE2eeReady(): Promise<boolean> {
     const s = getSettings();
     if (!s.e2eeEnabled) return true;
     if (hasE2eeKey()) return true;
-    toastr.warning('Unlock E2EE passphrase first.', 'TavernSync');
+    await tryRestoreE2eeKey();
+    if (hasE2eeKey()) {
+        updateE2eeUi();
+        return true;
+    }
+    toastr.warning(
+        s.e2eeRequireSessionUnlock
+            ? 'Enter your encryption passphrase (Encryption section).'
+            : 'Unlock this device once with your encryption passphrase.',
+        'TavernSync',
+    );
+    updateE2eeUi();
     return false;
 }
 
@@ -159,7 +204,7 @@ async function handleStatus(): Promise<void> {
             `Items: ${status.itemCount}`,
             s.lastStatusMessage,
             `Device: ${s.deviceName}`,
-            `E2EE: ${s.e2eeEnabled ? (hasE2eeKey() ? 'unlocked' : 'locked') : 'off'}`,
+            `E2EE: ${s.e2eeEnabled ? (hasE2eeKey() ? (s.e2eeRequireSessionUnlock ? 'session' : 'device remembered') : 'locked') : 'off'}`,
             `Remote version: ${status.remoteVersion}`,
         ];
         console.log(LOG_PREFIX, 'Status\n' + lines.join('\n'));
@@ -171,7 +216,7 @@ async function handleStatus(): Promise<void> {
 }
 
 async function handlePush(): Promise<void> {
-    if (!ensureE2eeReady()) return;
+    if (!(await ensureE2eeReady())) return;
     try {
         const { message } = await withLoader('Pushing…', () =>
             runSync({
@@ -192,7 +237,7 @@ async function handlePush(): Promise<void> {
 }
 
 async function handlePull(): Promise<void> {
-    if (!ensureE2eeReady()) return;
+    if (!(await ensureE2eeReady())) return;
     try {
         const { message } = await withLoader('Pulling…', () =>
             runSync({
@@ -225,7 +270,14 @@ async function handleUnlockE2ee(): Promise<void> {
     try {
         await unlockE2ee(passphrase);
         $('#tavernsync_passphrase').val('');
-        toastr.success('E2EE unlocked for this session.', 'TavernSync');
+        updateE2eeUi();
+        const s = getSettings();
+        toastr.success(
+            s.e2eeRequireSessionUnlock
+                ? 'E2EE unlocked for this session.'
+                : 'Device unlocked — Push/Pull work until you lock this device.',
+            'TavernSync',
+        );
     } catch (e) {
         console.error(LOG_PREFIX, e);
         toastr.error(`Unlock failed: ${String(e)}`, 'TavernSync');
@@ -282,6 +334,29 @@ function bindSettingsHandlers(): void {
     $(document).on('change', '#tavernsync_e2ee', (e: { target: HTMLInputElement }) => {
         getSettings().e2eeEnabled = !!$(e.target).prop('checked');
         saveSettings();
+        updateE2eeUi();
+    });
+
+    $(document).on('change', '#tavernsync_e2ee_session', (e: { target: HTMLInputElement }) => {
+        const on = !!$(e.target).prop('checked');
+        const s = getSettings();
+        s.e2eeRequireSessionUnlock = on;
+        saveSettings();
+        void (async () => {
+            if (on) {
+                await forgetRememberedE2eeKey();
+                toastr.info('Remembered key cleared. Passphrase required each page load.', 'TavernSync');
+            } else if (hasE2eeKey()) {
+                const ok = await rememberCurrentE2eeKey();
+                if (!ok) {
+                    await lockE2ee({ forgetDevice: true });
+                    toastr.info('Re-enter passphrase once to remember this device.', 'TavernSync');
+                } else {
+                    toastr.success('This device will stay unlocked across reloads.', 'TavernSync');
+                }
+            }
+            updateE2eeUi();
+        })();
     });
 
     $(document).on('click', '#tavernsync_connect', () => { void handleConnect(); });
@@ -290,8 +365,10 @@ function bindSettingsHandlers(): void {
     $(document).on('click', '#tavernsync_status_btn, #tavernsync_status_line', () => { void handleStatus(); });
     $(document).on('click', '#tavernsync_unlock_e2ee', () => { void handleUnlockE2ee(); });
     $(document).on('click', '#tavernsync_change_passphrase', () => {
-        lockE2ee();
-        toastr.info('Session key cleared.', 'TavernSync');
+        void lockE2ee({ forgetDevice: true }).then(() => {
+            updateE2eeUi();
+            toastr.info('This device locked. Enter passphrase again to sync.', 'TavernSync');
+        });
     });
     $(document).on('click', '#tavernsync_rebuild_index', () => { void handleScan(); });
     $(document).on('click', '#tavernsync_view_log', () => {
@@ -307,7 +384,7 @@ async function handleWipeRemote(): Promise<void> {
         return;
     }
     const ok = window.confirm(
-        'Wipe the remote sync manifest?\n\nThis does not delete your local SillyTavern data.\nAfter wiping, Unlock → Push from the machine that has the correct data.',
+        'Wipe the remote sync manifest?\n\nThis does not delete your local SillyTavern data.\nAfter wiping, Push from the machine that has the correct data.',
     );
     if (!ok) return;
     try {
@@ -322,6 +399,7 @@ async function handleWipeRemote(): Promise<void> {
 
 async function handleResetState(): Promise<void> {
     try {
+        await lockE2ee({ forgetDevice: true });
         await getSyncStore().clear();
         await clearBase();
         const s = getSettings();
@@ -329,6 +407,7 @@ async function handleResetState(): Promise<void> {
         s.lastItemCount = 0;
         saveSettings();
         setStatusLine('Never synced');
+        updateE2eeUi();
         toastr.success('Local sync state cleared.', 'TavernSync');
     } catch (e) {
         console.error(LOG_PREFIX, e);
@@ -398,7 +477,7 @@ function registerEventListeners(): void {
             setTimeout(() => {
                 void (async () => {
                     try {
-                        if (!ensureE2eeReady()) return;
+                        if (!(await ensureE2eeReady())) return;
                         await runSync({ direction: 'pull', onProgress: (m) => setStatusLine(m) });
                         toastr.info('Auto-pull on startup finished.', 'TavernSync');
                     } catch (e) {
@@ -425,7 +504,7 @@ function registerEventListeners(): void {
             setTimeout(() => {
                 void (async () => {
                     try {
-                        if (!ensureE2eeReady()) return;
+                        if (!(await ensureE2eeReady())) return;
                         await runSync({ direction: 'push', onProgress: (m) => setStatusLine(m) });
                     } catch (e) {
                         console.error(LOG_PREFIX, 'auto-push on chat close failed', e);
@@ -454,6 +533,7 @@ jQuery(async () => {
         getSettings();
         ensureDeviceName();
         getSyncStore();
+        await tryRestoreE2eeKey();
         await renderSettingsPanel();
         registerSlashCommands();
         registerEventListeners();

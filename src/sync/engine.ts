@@ -4,7 +4,7 @@
 
 import { ConflictError } from '../backend/adapter';
 import { HttpStorageAdapter, uploadBlobsParallel } from '../backend/http';
-import { decodeSalt, deriveKey, encodeSalt, open, seal } from '../crypto';
+import { decodeSalt, deriveKey, encodeSalt, exportKeyRaw, importAesKey, open, seal } from '../crypto';
 import { LOG_PREFIX, getSettings, saveSettings, type SyncScopeSettings } from '../settings';
 import { loadBlob, loadLocalManifest, scanLocal, storeBlob } from '../st-adapter/scan';
 import { applyLocalItem, decodeUtf8Jsonl, parseItemId, writeChat } from '../st-adapter/write';
@@ -16,7 +16,7 @@ import { buildPlan } from '../sync-core/plan';
 import { mergeSettingsThreeWay, sha256Hex } from '../st-adapter/normalize';
 import type { DiffEntry, Manifest, SyncItem } from '../sync-core/types';
 import { emptyManifest } from '../sync-core/types';
-import { BASE_KEY, getSyncStore } from '../state/store';
+import { BASE_KEY, E2EE_KEY_STORAGE, getSyncStore } from '../state/store';
 
 export interface BaseState {
     manifest: Manifest;
@@ -64,6 +64,56 @@ export async function wipeRemoteSyncData(): Promise<void> {
     console.log(LOG_PREFIX, 'Remote manifest wiped', { next });
 }
 
+function b64encode(bytes: Uint8Array): string {
+    let s = '';
+    for (const b of bytes) s += String.fromCharCode(b);
+    return btoa(s);
+}
+
+function b64decode(s: string): Uint8Array {
+    const bin = atob(s);
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+}
+
+async function persistRememberedKey(key: CryptoKey): Promise<void> {
+    const s = getSettings();
+    if (s.e2eeRequireSessionUnlock) {
+        await getSyncStore().removeItem(E2EE_KEY_STORAGE);
+        return;
+    }
+    const raw = await exportKeyRaw(key);
+    await getSyncStore().setItem(E2EE_KEY_STORAGE, b64encode(raw));
+}
+
+async function clearRememberedKey(): Promise<void> {
+    await getSyncStore().removeItem(E2EE_KEY_STORAGE);
+}
+
+/**
+ * Load remembered device key from localforage into memory.
+ * Returns true if a key is now available.
+ */
+export async function tryRestoreE2eeKey(): Promise<boolean> {
+    const s = getSettings();
+    if (!s.e2eeEnabled) return true;
+    if (sessionKey) return true;
+    if (s.e2eeRequireSessionUnlock) return false;
+
+    try {
+        const b64 = await getSyncStore().getItem<string>(E2EE_KEY_STORAGE);
+        if (!b64) return false;
+        sessionKey = await importAesKey(b64decode(b64));
+        console.log(LOG_PREFIX, 'Restored remembered E2EE key for this device');
+        return true;
+    } catch (e) {
+        console.warn(LOG_PREFIX, 'Failed to restore remembered E2EE key', e);
+        await clearRememberedKey();
+        return false;
+    }
+}
+
 /**
  * E2EE salt must be per-account (shared), not per-device.
  * Otherwise HMAC blob keys differ and pulls 404.
@@ -78,7 +128,7 @@ export async function syncAccountSalt(passphrase?: string): Promise<void> {
     if (!localSalt) {
         // Need a salt to publish — create one if unlocking
         if (!passphrase && !sessionPassphrase) return;
-        const { salt } = await deriveKey(passphrase || sessionPassphrase || '');
+        const { salt } = await deriveKey(passphrase || sessionPassphrase || '', undefined, { extractable: true });
         localSalt = encodeSalt(salt);
         s.e2eeSalt = localSalt;
         saveSettings();
@@ -91,12 +141,15 @@ export async function syncAccountSalt(passphrase?: string): Promise<void> {
         saveSettings();
         const pw = passphrase || sessionPassphrase;
         if (pw) {
-            const { key } = await deriveKey(pw, decodeSalt(canonical));
+            const { key } = await deriveKey(pw, decodeSalt(canonical), { extractable: true });
             sessionKey = key;
+            await persistRememberedKey(key);
         } else {
-            // Salt changed — force re-unlock
+            // Salt changed — remembered key is for old salt; force re-unlock
             sessionKey = null;
-            console.warn(LOG_PREFIX, 'Re-unlock E2EE passphrase after adopting server salt');
+            sessionPassphrase = null;
+            await clearRememberedKey();
+            console.warn(LOG_PREFIX, 'Re-enter E2EE passphrase after adopting server salt');
         }
     }
 }
@@ -104,6 +157,7 @@ export async function syncAccountSalt(passphrase?: string): Promise<void> {
 export async function unlockE2ee(passphrase: string): Promise<void> {
     const s = getSettings();
     sessionPassphrase = passphrase;
+    const remember = !s.e2eeRequireSessionUnlock;
 
     // Prefer account salt from server when available
     if (s.endpoint.trim() && s.deviceToken.trim()) {
@@ -119,17 +173,21 @@ export async function unlockE2ee(passphrase: string): Promise<void> {
         }
     }
 
-    let salt: Uint8Array;
+    let key: CryptoKey;
     if (s.e2eeSalt) {
-        salt = decodeSalt(s.e2eeSalt);
-        const { key } = await deriveKey(passphrase, salt);
-        sessionKey = key;
+        const derived = await deriveKey(passphrase, decodeSalt(s.e2eeSalt), { extractable: remember });
+        key = derived.key;
     } else {
-        const { key, salt: newSalt } = await deriveKey(passphrase);
-        sessionKey = key;
-        s.e2eeSalt = encodeSalt(newSalt);
+        const derived = await deriveKey(passphrase, undefined, { extractable: remember });
+        key = derived.key;
+        s.e2eeSalt = encodeSalt(derived.salt);
         saveSettings();
     }
+    sessionKey = key;
+    await persistRememberedKey(key);
+
+    // Drop passphrase from memory when we remember the device key
+    if (remember) sessionPassphrase = null;
 
     try {
         await syncAccountSalt(passphrase);
@@ -138,9 +196,30 @@ export async function unlockE2ee(passphrase: string): Promise<void> {
     }
 }
 
-export function lockE2ee(): void {
+/** Clear in-memory key. Optionally forget the remembered device key too. */
+export async function lockE2ee(opts?: { forgetDevice?: boolean }): Promise<void> {
     sessionKey = null;
     sessionPassphrase = null;
+    if (opts?.forgetDevice !== false) {
+        // Default lock forgets remembered key so next sync needs passphrase
+        await clearRememberedKey();
+    }
+}
+
+/** Try to persist the in-memory key (needs extractable CryptoKey). */
+export async function rememberCurrentE2eeKey(): Promise<boolean> {
+    if (!sessionKey) return false;
+    try {
+        await persistRememberedKey(sessionKey);
+        return !getSettings().e2eeRequireSessionUnlock;
+    } catch {
+        return false;
+    }
+}
+
+/** Forget remembered key without requiring lock semantics from callers that only toggle the setting. */
+export async function forgetRememberedE2eeKey(): Promise<void> {
+    await clearRememberedKey();
 }
 
 export function hasE2eeKey(): boolean {
@@ -198,7 +277,7 @@ function isBlobMissingError(e: unknown): boolean {
 async function maybeEncrypt(bytes: Uint8Array): Promise<Uint8Array> {
     const s = getSettings();
     if (!s.e2eeEnabled) return bytes;
-    if (!sessionKey) throw new Error('E2EE enabled but passphrase not unlocked this session');
+    if (!sessionKey) throw new Error('E2EE enabled but no key on this device — enter passphrase once');
     return seal(sessionKey, bytes);
 }
 
@@ -206,7 +285,7 @@ async function maybeDecrypt(bytes: Uint8Array, expectedHash: string): Promise<Ui
     const s = getSettings();
     let plain = bytes;
     if (s.e2eeEnabled) {
-        if (!sessionKey) throw new Error('E2EE enabled but passphrase not unlocked this session');
+        if (!sessionKey) throw new Error('E2EE enabled but no key on this device — enter passphrase once');
         plain = await open(sessionKey, bytes);
     }
     const hash = await sha256Hex(plain);
@@ -305,7 +384,7 @@ export async function runSync(opts: SyncRunOptions): Promise<{ message: string }
     if (s.e2eeEnabled) {
         await syncAccountSalt();
         if (!sessionKey) {
-            throw new Error('E2EE enabled but passphrase not unlocked this session');
+            throw new Error('E2EE enabled but no key on this device — enter passphrase once');
         }
     }
     const adapter = requireAdapter();

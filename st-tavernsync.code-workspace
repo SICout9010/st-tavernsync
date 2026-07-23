@@ -1,0 +1,11 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../../DeepDarkFantasy_MacOS/SillyTavern-Launcher/SillyTavern/public/scripts/extensions/st-immersive-gen-audio"
+		}
+	],
+	"settings": {}
+}

@@ -20,8 +20,10 @@ function b64decode(s: string): Uint8Array {
 export async function deriveKey(
     passphrase: string,
     salt?: Uint8Array,
+    opts?: { extractable?: boolean },
 ): Promise<{ key: CryptoKey; salt: Uint8Array }> {
     const usedSalt = salt ?? crypto.getRandomValues(new Uint8Array(SALT_BYTES));
+    const extractable = !!opts?.extractable;
     const baseKey = await crypto.subtle.importKey(
         'raw',
         new TextEncoder().encode(passphrase),
@@ -38,7 +40,7 @@ export async function deriveKey(
         },
         baseKey,
         { name: 'AES-GCM', length: 256 },
-        false,
+        extractable,
         ['encrypt', 'decrypt'],
     );
     return { key, salt: usedSalt };
