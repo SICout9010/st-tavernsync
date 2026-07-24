@@ -498,7 +498,7 @@ export async function runSync(opts: SyncRunOptions): Promise<{ message: string }
                 if (isBlobMissingError(e)) {
                     console.error(LOG_PREFIX, `Skipping pull ${id}: blob ${hash} not on server`, e);
                     toastr.warning(
-                        `Skipped ${id} — file missing on server. On the machine that has the data: Unlock → Push.`,
+                        `Skipped ${id} — missing on the server. Push from the device that still has it.`,
                         'TavernSync',
                     );
                     return;
@@ -587,7 +587,7 @@ export async function runSync(opts: SyncRunOptions): Promise<{ message: string }
         if (dropped.length) {
             console.error(LOG_PREFIX, 'Dropping manifest entries with missing blobs', dropped);
             toastr.warning(
-                `${dropped.length} item(s) not published — blob missing on server. Unlock + Push again.`,
+                `${dropped.length} item(s) weren't uploaded. Unlock this device if needed, then Push again.`,
                 'TavernSync',
             );
         }
@@ -629,9 +629,9 @@ export async function runSync(opts: SyncRunOptions): Promise<{ message: string }
             : settingsChanged
                 ? 'Settings'
                 : 'Personas';
-        toastr.info(`${what} were pulled. Reload recommended.`, 'TavernSync');
+        toastr.info(`${what} updated. A page reload is recommended.`, 'TavernSync');
         // Soft prompt — don't force
-        if (confirm(`TavernSync pulled ${what.toLowerCase()}. Reload the page now?`)) {
+        if (confirm(`TavernSync updated ${what.toLowerCase()}. Reload now so everything shows up?`)) {
             location.reload();
         }
     }

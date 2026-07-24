@@ -2,7 +2,7 @@
     <div class="inline-drawer">
         <div class="inline-drawer-toggle inline-drawer-header">
             <b>TavernSync</b>
-            <span class="tavernsync-status-line" id="tavernsync_status_line" title="Click for details">● Never synced</span>
+            <span class="tavernsync-status-line" id="tavernsync_status_line">● Not set up yet</span>
             <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
         </div>
         <div class="inline-drawer-content">
@@ -16,50 +16,57 @@
             <div class="flex-container flexGap5 alignItemsCenter flexWrap">
                 <label for="tavernsync_backend_mode"><b>Backend</b></label>
                 <select id="tavernsync_backend_mode" class="text_pole flex1">
-                    <option value="custom">Custom (bring your own)</option>
-                    <option value="managed">Managed</option>
+                    <option value="custom">Your own server</option>
+                    <option value="managed">Managed (coming soon)</option>
                 </select>
             </div>
 
-            <label for="tavernsync_endpoint"><b>Endpoint</b></label>
+            <label for="tavernsync_endpoint"><b>Server URL</b></label>
             <div class="flex-container flexGap5 alignItemsCenter">
                 <input id="tavernsync_endpoint" class="text_pole flex1" type="url" autocomplete="off"
-                    placeholder="https://sync.example.com" />
-                <div id="tavernsync_connect" class="menu_button menu_button_icon" title="Connect (stub)">
-                    Connect
+                    placeholder="https://your-worker.example.workers.dev" />
+                <div id="tavernsync_connect" class="menu_button menu_button_icon" title="Check that the server and token work">
+                    Test
                 </div>
             </div>
+            <small class="tavernsync-hint">Where this device sends and receives sync data.</small>
 
             <label for="tavernsync_device_name"><b>Device name</b></label>
             <input id="tavernsync_device_name" class="text_pole" type="text" autocomplete="off"
-                placeholder="desktop-main" />
+                placeholder="laptop" />
+            <small class="tavernsync-hint">Just a label so you can tell devices apart (e.g. laptop, phone).</small>
 
-            <label for="tavernsync_device_token"><b>Device token</b></label>
+            <label for="tavernsync_device_token"><b>Sync token</b></label>
             <input id="tavernsync_device_token" class="text_pole" type="password" autocomplete="off"
-                placeholder="Bearer token for sync backend" />
-            <small class="tavernsync-hint">Stored in extension settings (plaintext). Prefer a dedicated sync token, not your ST password.</small>
+                placeholder="shared secret for your sync account" />
+            <small class="tavernsync-hint">
+                Same token on every device you want to sync. Use a dedicated sync secret — not your SillyTavern login password.
+            </small>
 
-            <div id="tavernsync_quota_line" class="tavernsync-hint">Quota: —</div>
+            <div id="tavernsync_quota_line" class="tavernsync-hint">Storage: —</div>
 
             <hr class="sysHR" />
 
             <div class="flex-container flexGap5 flexWrap">
-                <div id="tavernsync_push" class="menu_button menu_button_icon" title="Push local → remote">
+                <div id="tavernsync_push" class="menu_button menu_button_icon" title="Upload this device to the server">
                     ↑ Push
                 </div>
-                <div id="tavernsync_pull" class="menu_button menu_button_icon" title="Pull remote → local">
+                <div id="tavernsync_pull" class="menu_button menu_button_icon" title="Download from the server to this device">
                     ↓ Pull
                 </div>
-                <div id="tavernsync_status_btn" class="menu_button menu_button_icon" title="Show sync status">
-                    ⟳ Status
+                <div id="tavernsync_status_btn" class="menu_button menu_button_icon" title="Compare this device with the server (runs a scan)">
+                    ⟳ Check status
                 </div>
             </div>
+            <small class="tavernsync-hint">
+                Push = this device is the source. Pull = bring changes from other devices here.
+            </small>
 
             <hr class="sysHR" />
 
             <div class="inline-drawer">
                 <div class="inline-drawer-toggle inline-drawer-header">
-                    <b>Sync scope</b>
+                    <b>What to sync</b>
                     <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
                 </div>
                 <div class="inline-drawer-content">
@@ -112,16 +119,19 @@
                 <div class="inline-drawer-content">
                     <label class="checkbox_label" for="tavernsync_auto_startup">
                         <input id="tavernsync_auto_startup" type="checkbox" />
-                        <span>On startup</span>
+                        <span>Pull when SillyTavern starts</span>
                     </label>
                     <label class="checkbox_label" for="tavernsync_auto_chat_close">
                         <input id="tavernsync_auto_chat_close" type="checkbox" />
-                        <span>After chat closes</span>
+                        <span>Push when you leave a chat</span>
                     </label>
                     <label class="checkbox_label" for="tavernsync_propagate_deletes">
                         <input id="tavernsync_propagate_deletes" type="checkbox" />
-                        <span>Propagate deletions (danger)</span>
+                        <span>Delete on other devices too</span>
                     </label>
+                    <small class="tavernsync-hint">
+                        Deleting on other devices is easy to regret — leave it off unless you mean it.
+                    </small>
                 </div>
             </div>
 
@@ -133,34 +143,36 @@
                 <div class="inline-drawer-content">
                     <label class="checkbox_label" for="tavernsync_e2ee">
                         <input id="tavernsync_e2ee" type="checkbox" />
-                        <span>End-to-end encryption (recommended)</span>
+                        <span>Encrypt data on the server (recommended)</span>
                     </label>
-                    <div id="tavernsync_e2ee_status" class="tavernsync-hint">E2EE: —</div>
+                    <div id="tavernsync_e2ee_status" class="tavernsync-hint">Encryption: —</div>
 
                     <div id="tavernsync_e2ee_setup">
                         <label for="tavernsync_passphrase"><b>Passphrase</b></label>
                         <div class="flex-container flexGap5 alignItemsCenter">
                             <input id="tavernsync_passphrase" class="text_pole flex1" type="password" autocomplete="off"
-                                placeholder="Set once per device" />
-                            <div id="tavernsync_unlock_e2ee" class="menu_button menu_button_icon">Unlock device</div>
+                                placeholder="same on every device" />
+                            <div id="tavernsync_unlock_e2ee" class="menu_button menu_button_icon">Unlock</div>
                         </div>
+                        <small class="tavernsync-hint">
+                            Write it down somewhere safe. If you lose it, encrypted sync data cannot be recovered.
+                        </small>
                         <label class="checkbox_label" for="tavernsync_recovery_ack">
                             <input id="tavernsync_recovery_ack" type="checkbox" />
-                            <span>I've saved my recovery phrase</span>
+                            <span>I've saved my passphrase</span>
                         </label>
                     </div>
 
                     <label class="checkbox_label" for="tavernsync_e2ee_session">
                         <input id="tavernsync_e2ee_session" type="checkbox" />
-                        <span>Require passphrase every page load (paranoid)</span>
+                        <span>Ask for passphrase after every refresh</span>
                     </label>
                     <div id="tavernsync_change_passphrase" class="menu_button menu_button_icon">
                         Lock this device
                     </div>
                     <small class="tavernsync-hint">
-                        Default: unlock once; we remember the derived key on this browser (not the passphrase).
-                        E2EE protects against the server/network — not other extensions on this profile.
-                        Losing the passphrase means losing synced data.
+                        By default you unlock once per device; Push and Pull then just work.
+                        Encryption protects data on the server — not against other extensions in this browser.
                     </small>
                 </div>
             </div>
@@ -172,16 +184,21 @@
                 </div>
                 <div class="inline-drawer-content">
                     <div class="flex-container flexGap5 flexWrap">
-                        <div id="tavernsync_rebuild_index" class="menu_button menu_button_icon">Rebuild local index</div>
-                        <div id="tavernsync_view_log" class="menu_button menu_button_icon">View last sync log</div>
-                        <div id="tavernsync_reset_state" class="menu_button menu_button_icon">Reset local sync state</div>
-                        <div id="tavernsync_wipe_remote" class="menu_button menu_button_icon" title="Clears the remote manifest (not R2 orphans)">
-                            Wipe remote sync data
+                        <div id="tavernsync_rebuild_index" class="menu_button menu_button_icon" title="Rescan local SillyTavern data">
+                            Rescan this device
+                        </div>
+                        <div id="tavernsync_view_log" class="menu_button menu_button_icon">
+                            Show logs in console
+                        </div>
+                        <div id="tavernsync_reset_state" class="menu_button menu_button_icon">
+                            Reset sync on this device
+                        </div>
+                        <div id="tavernsync_wipe_remote" class="menu_button menu_button_icon" title="Clears the server sync index, not your local SillyTavern files">
+                            Wipe server sync data
                         </div>
                     </div>
                     <small class="tavernsync-hint">
-                        If Pull fails with missing blobs, wipe remote here, then Push from the machine that has the real data
-                        (unlock that device once if needed).
+                        Rescan only when something looks out of date. If Pull says files are missing, wipe the server index, then Push from the device that has the good copy.
                     </small>
                 </div>
             </div>

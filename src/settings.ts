@@ -3,7 +3,7 @@
 export const LOG_PREFIX = '[TavernSync]';
 export const MODULE_NAME = 'tavernsync';
 /** Bump with package.json / manifest when releasing — logged on load so you can confirm cache bust. */
-export const BUILD_ID = '0.1.4';
+export const BUILD_ID = '0.1.6';
 
 /** Folder name under scripts/extensions/ when installed (third-party or system). */
 export const EXTENSION_FOLDER = 'third-party/st-tavernsync';
@@ -65,7 +65,7 @@ export const defaultSettings: Readonly<TavernSyncSettings> = Object.freeze({
     e2eeEnabled: true,
     e2eeRequireSessionUnlock: false,
     e2eeSalt: '',
-    lastStatusMessage: 'Never synced',
+    lastStatusMessage: 'Not set up yet',
     lastItemCount: 0,
 });
 

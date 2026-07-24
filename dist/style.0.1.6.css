@@ -5,7 +5,7 @@
     font-weight: normal;
     font-size: 0.9em;
     opacity: 0.85;
-    cursor: pointer;
+    cursor: default;
 }
 
 .tavernsync-settings .tavernsync-hint {

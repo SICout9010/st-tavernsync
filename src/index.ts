@@ -45,7 +45,7 @@ function updateE2eeUi(): void {
     const $setup = $('#tavernsync_e2ee_setup');
 
     if (!s.e2eeEnabled) {
-        $status.text('E2EE: off');
+        $status.text('Encryption: off');
         $setup.hide();
         return;
     }
@@ -53,15 +53,15 @@ function updateE2eeUi(): void {
     if (unlocked) {
         $status.text(
             s.e2eeRequireSessionUnlock
-                ? 'E2EE: unlocked this session'
-                : 'E2EE: unlocked · this device remembered',
+                ? 'Encryption: unlocked for this page'
+                : 'Encryption: ready on this device',
         );
         $setup.hide();
     } else {
         $status.text(
             s.e2eeRequireSessionUnlock
-                ? 'E2EE: locked — enter passphrase this session'
-                : 'E2EE: locked — enter passphrase once on this device',
+                ? 'Encryption: enter passphrase to sync'
+                : 'Encryption: unlock once on this device',
         );
         $setup.show();
     }
@@ -105,7 +105,7 @@ function hydrateSettingsUI(): void {
     setStatusLine(
         s.lastItemCount
             ? `${s.lastStatusMessage} · ${s.lastItemCount} items`
-            : s.lastStatusMessage || 'Never synced',
+            : s.lastStatusMessage || 'Not set up yet',
     );
     updateE2eeUi();
 }
@@ -128,8 +128,8 @@ async function ensureE2eeReady(): Promise<boolean> {
     }
     toastr.warning(
         s.e2eeRequireSessionUnlock
-            ? 'Enter your encryption passphrase (Encryption section).'
-            : 'Unlock this device once with your encryption passphrase.',
+            ? 'Enter your encryption passphrase under Encryption.'
+            : 'Unlock this device once under Encryption, then Push/Pull will work.',
         'TavernSync',
     );
     updateE2eeUi();
@@ -139,7 +139,7 @@ async function ensureE2eeReady(): Promise<boolean> {
 async function handleConnect(): Promise<void> {
     const s = getSettings();
     if (!s.endpoint.trim() || !s.deviceToken.trim()) {
-        toastr.warning('Set endpoint and device token first.', 'TavernSync');
+        toastr.warning('Add your server URL and sync token first.', 'TavernSync');
         return;
     }
     try {
@@ -153,12 +153,12 @@ async function handleConnect(): Promise<void> {
         const { version } = await adapter.getManifest();
         const quota = await adapter.quota();
         $('#tavernsync_quota_line').text(
-            `Quota: ${formatBytes(quota.usedBytes)} / ${formatBytes(quota.limitBytes)} · ${quota.itemCount} blobs · manifest v${version}`,
+            `Storage: ${formatBytes(quota.usedBytes)} / ${formatBytes(quota.limitBytes)} · ${quota.itemCount} files`,
         );
-        toastr.success(`Connected (manifest v${version}).`, 'TavernSync');
+        toastr.success(`Connected (v${version}).`, 'TavernSync');
     } catch (e) {
         console.error(LOG_PREFIX, e);
-        toastr.error(`Connect failed: ${String(e)}`, 'TavernSync');
+        toastr.error(`Could not connect: ${String(e)}`, 'TavernSync');
     }
 }
 
@@ -174,26 +174,50 @@ function formatBytes(n: number): string {
     return `${v.toFixed(i ? 1 : 0)} ${units[i]}`;
 }
 
-async function handleScan(): Promise<void> {
+async function handleScan(opts?: { quiet?: boolean }): Promise<void> {
+    const quiet = !!opts?.quiet;
     try {
-        const result = await withLoader('Scanning local ST data…', async () =>
-            runScan((m) => setStatusLine(m)),
-        );
+        const run = () => runScan(quiet ? undefined : (m) => setStatusLine(m));
+        const result = quiet
+            ? await run()
+            : await withLoader('Scanning this device…', run);
         const s = getSettings();
         s.lastItemCount = result.itemCount;
-        s.lastStatusMessage = `Indexed ${result.itemCount} items`;
+        s.lastStatusMessage = `${result.itemCount} items`;
         saveSettings();
-        setStatusLine(`${s.lastStatusMessage}`);
-        toastr.success(`Indexed ${result.itemCount} items.`, 'TavernSync');
+        setStatusLine(s.lastStatusMessage);
+        if (!quiet) {
+            toastr.success(`Found ${result.itemCount} items on this device.`, 'TavernSync');
+        } else {
+            console.log(LOG_PREFIX, `Quiet scan: ${result.itemCount} items`);
+        }
     } catch (e) {
         console.error(LOG_PREFIX, e);
-        toastr.error(`Scan failed: ${String(e)}`, 'TavernSync');
+        if (!quiet) {
+            toastr.error(`Rescan failed: ${String(e)}`, 'TavernSync');
+        }
     }
+}
+
+let quietScanInFlight: Promise<void> | null = null;
+
+function bindDrawerQuietScan(): void {
+    // Only the top-level TavernSync drawer — not nested sections
+    const drawer = document.querySelector('#tavernsync_settings_root > .inline-drawer');
+    if (!drawer) return;
+    drawer.addEventListener('inline-drawer-toggle', () => {
+        const icon = drawer.querySelector(':scope > .inline-drawer-header .inline-drawer-icon');
+        if (!icon?.classList.contains('up')) return;
+        if (quietScanInFlight) return;
+        quietScanInFlight = handleScan({ quiet: true }).finally(() => {
+            quietScanInFlight = null;
+        });
+    });
 }
 
 async function handleStatus(): Promise<void> {
     try {
-        const status = await withLoader('Computing sync status…', () => getStatusDiff());
+        const status = await withLoader('Comparing with server…', () => getStatusDiff());
         const s = getSettings();
         s.lastItemCount = status.itemCount;
         s.lastStatusMessage = `${status.summary.push} to push · ${status.summary.pull} to pull · ${status.summary.conflict} conflict`;
@@ -201,14 +225,13 @@ async function handleStatus(): Promise<void> {
         setStatusLine(s.lastStatusMessage);
 
         const lines = [
-            `Items: ${status.itemCount}`,
+            `${status.itemCount} items`,
             s.lastStatusMessage,
             `Device: ${s.deviceName}`,
-            `E2EE: ${s.e2eeEnabled ? (hasE2eeKey() ? (s.e2eeRequireSessionUnlock ? 'session' : 'device remembered') : 'locked') : 'off'}`,
-            `Remote version: ${status.remoteVersion}`,
+            `Encryption: ${s.e2eeEnabled ? (hasE2eeKey() ? (s.e2eeRequireSessionUnlock ? 'session' : 'ready') : 'locked') : 'off'}`,
         ];
         console.log(LOG_PREFIX, 'Status\n' + lines.join('\n'));
-        toastr.info(lines.join(' · '), 'TavernSync status');
+        toastr.info(lines.join(' · '), 'TavernSync');
     } catch (e) {
         console.error(LOG_PREFIX, e);
         toastr.error(`Status failed: ${String(e)}`, 'TavernSync');
@@ -264,7 +287,7 @@ async function handleUnlockE2ee(): Promise<void> {
         return;
     }
     if (!$('#tavernsync_recovery_ack').prop('checked') && !getSettings().e2eeSalt) {
-        toastr.warning('Confirm you have saved your recovery phrase.', 'TavernSync');
+        toastr.warning('Confirm that you saved your passphrase first.', 'TavernSync');
         return;
     }
     try {
@@ -274,8 +297,8 @@ async function handleUnlockE2ee(): Promise<void> {
         const s = getSettings();
         toastr.success(
             s.e2eeRequireSessionUnlock
-                ? 'E2EE unlocked for this session.'
-                : 'Device unlocked — Push/Pull work until you lock this device.',
+                ? 'Unlocked for this page. You can Push or Pull now.'
+                : 'Device unlocked. Push and Pull will work until you lock this device.',
             'TavernSync',
         );
     } catch (e) {
@@ -345,14 +368,14 @@ function bindSettingsHandlers(): void {
         void (async () => {
             if (on) {
                 await forgetRememberedE2eeKey();
-                toastr.info('Remembered key cleared. Passphrase required each page load.', 'TavernSync');
+                toastr.info('Passphrase will be required after every refresh.', 'TavernSync');
             } else if (hasE2eeKey()) {
                 const ok = await rememberCurrentE2eeKey();
                 if (!ok) {
                     await lockE2ee({ forgetDevice: true });
-                    toastr.info('Re-enter passphrase once to remember this device.', 'TavernSync');
+                    toastr.info('Enter your passphrase once more to remember this device.', 'TavernSync');
                 } else {
-                    toastr.success('This device will stay unlocked across reloads.', 'TavernSync');
+                    toastr.success('This device stays unlocked across refreshes.', 'TavernSync');
                 }
             }
             updateE2eeUi();
@@ -362,17 +385,17 @@ function bindSettingsHandlers(): void {
     $(document).on('click', '#tavernsync_connect', () => { void handleConnect(); });
     $(document).on('click', '#tavernsync_push', () => { void handlePush(); });
     $(document).on('click', '#tavernsync_pull', () => { void handlePull(); });
-    $(document).on('click', '#tavernsync_status_btn, #tavernsync_status_line', () => { void handleStatus(); });
+    $(document).on('click', '#tavernsync_status_btn', () => { void handleStatus(); });
     $(document).on('click', '#tavernsync_unlock_e2ee', () => { void handleUnlockE2ee(); });
     $(document).on('click', '#tavernsync_change_passphrase', () => {
         void lockE2ee({ forgetDevice: true }).then(() => {
             updateE2eeUi();
-            toastr.info('This device locked. Enter passphrase again to sync.', 'TavernSync');
+            toastr.info('Device locked. Unlock again before syncing.', 'TavernSync');
         });
     });
     $(document).on('click', '#tavernsync_rebuild_index', () => { void handleScan(); });
     $(document).on('click', '#tavernsync_view_log', () => {
-        toastr.info('See browser console logs prefixed [TavernSync].', 'TavernSync');
+        toastr.info('Open the browser console and look for [TavernSync] lines.', 'TavernSync');
     });
     $(document).on('click', '#tavernsync_reset_state', () => { void handleResetState(); });
     $(document).on('click', '#tavernsync_wipe_remote', () => { void handleWipeRemote(); });
@@ -380,17 +403,17 @@ function bindSettingsHandlers(): void {
 
 async function handleWipeRemote(): Promise<void> {
     if (!getSettings().endpoint.trim() || !getSettings().deviceToken.trim()) {
-        toastr.warning('Set endpoint and device token first.', 'TavernSync');
+        toastr.warning('Add your server URL and sync token first.', 'TavernSync');
         return;
     }
     const ok = window.confirm(
-        'Wipe the remote sync manifest?\n\nThis does not delete your local SillyTavern data.\nAfter wiping, Push from the machine that has the correct data.',
+        'Clear sync data on the server?\n\nYour local SillyTavern files stay put.\nAfterward, Push from the device that has the copy you want to keep.',
     );
     if (!ok) return;
     try {
         await wipeRemoteSyncData();
-        setStatusLine('Remote wiped');
-        toastr.success('Remote sync data wiped. Push from your main machine next.', 'TavernSync');
+        setStatusLine('Server sync cleared');
+        toastr.success('Server sync data wiped. Push from your main device next.', 'TavernSync');
     } catch (e) {
         console.error(LOG_PREFIX, e);
         toastr.error(`Wipe failed: ${String(e)}`, 'TavernSync');
@@ -403,15 +426,15 @@ async function handleResetState(): Promise<void> {
         await getSyncStore().clear();
         await clearBase();
         const s = getSettings();
-        s.lastStatusMessage = 'Never synced';
+        s.lastStatusMessage = 'Not set up yet';
         s.lastItemCount = 0;
         saveSettings();
-        setStatusLine('Never synced');
+        setStatusLine('Not set up yet');
         updateE2eeUi();
-        toastr.success('Local sync state cleared.', 'TavernSync');
+        toastr.success('Sync history on this device was cleared.', 'TavernSync');
     } catch (e) {
         console.error(LOG_PREFIX, e);
-        toastr.error('Failed to reset sync state.', 'TavernSync');
+        toastr.error('Could not reset sync on this device.', 'TavernSync');
     }
 }
 
@@ -422,6 +445,7 @@ async function renderSettingsPanel(): Promise<void> {
     if ($target.length) $target.append(html);
     else $('#extensions_settings').append(html);
     bindSettingsHandlers();
+    bindDrawerQuietScan();
     hydrateSettingsUI();
 }
 
