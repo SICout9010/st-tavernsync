@@ -24,7 +24,7 @@ export interface BaseState {
     remoteVersion: number;
 }
 
-export type ConflictChoice = 'local' | 'remote' | 'both';
+export type ConflictChoice = 'local' | 'remote' | 'both' | 'skip';
 
 let sessionKey: CryptoKey | null = null;
 let sessionPassphrase: string | null = null;
@@ -283,16 +283,31 @@ async function maybeEncrypt(bytes: Uint8Array): Promise<Uint8Array> {
 
 async function maybeDecrypt(bytes: Uint8Array, expectedHash: string): Promise<Uint8Array> {
     const s = getSettings();
-    let plain = bytes;
-    if (s.e2eeEnabled) {
-        if (!sessionKey) throw new Error('E2EE enabled but no key on this device — enter passphrase once');
-        plain = await open(sessionKey, bytes);
+    if (!s.e2eeEnabled) {
+        const hash = await sha256Hex(bytes);
+        if (hash !== expectedHash) {
+            throw new Error(`Blob hash mismatch: expected ${expectedHash}, got ${hash}`);
+        }
+        return bytes;
     }
-    const hash = await sha256Hex(plain);
-    if (hash !== expectedHash) {
-        throw new Error(`Blob hash mismatch: expected ${expectedHash}, got ${hash}`);
+    if (!sessionKey) throw new Error('E2EE enabled but no key on this device — enter passphrase once');
+
+    try {
+        const plain = await open(sessionKey, bytes);
+        const hash = await sha256Hex(plain);
+        if (hash !== expectedHash) {
+            throw new Error(`Blob hash mismatch: expected ${expectedHash}, got ${hash}`);
+        }
+        return plain;
+    } catch (decryptErr) {
+        // Older pushes may have stored plaintext under the same content hash (E2EE off → on).
+        const asPlainHash = await sha256Hex(bytes);
+        if (asPlainHash === expectedHash) {
+            console.warn(LOG_PREFIX, 'Blob was plaintext; accepting despite E2EE on', expectedHash.slice(0, 12));
+            return bytes;
+        }
+        throw decryptErr;
     }
-    return plain;
 }
 
 export async function runScan(onProgress?: (m: string) => void) {
@@ -372,6 +387,15 @@ export interface SyncRunOptions {
     /** Restrict to these types (M4 lorebooks+presets dogfood) */
     typeFilter?: Set<string>;
     onProgress?: (m: string) => void;
+    /**
+     * Resolve all remaining conflicts at once.
+     * Prefer this over per-item resolveConflict.
+     */
+    resolveConflicts?: (
+        entries: DiffEntry[],
+        direction: 'push' | 'pull' | 'both',
+    ) => Promise<Map<string, ConflictChoice>>;
+    /** @deprecated prefer resolveConflicts */
     resolveConflict?: (entry: DiffEntry) => Promise<ConflictChoice>;
 }
 
@@ -416,13 +440,15 @@ export async function runSync(opts: SyncRunOptions): Promise<{ message: string }
                 e.action = 'push';
             }
         } catch (err) {
-            console.error(LOG_PREFIX, 'fast-forward check failed', e.id, err);
+            // Common: remote chat encrypted with another key, or corrupt/missing blob.
+            // Fall through to normal conflict UI — sync itself is not aborted.
+            console.warn(LOG_PREFIX, 'fast-forward skipped (will ask on conflict)', e.id, err);
         }
     }
 
-    // User conflict resolution for remaining conflicts
-    for (const e of entries) {
-        if (e.action !== 'conflict') continue;
+    // User conflict resolution for remaining conflicts (batch once)
+    const conflictEntries = entries.filter((e) => e.action === 'conflict');
+    for (const e of conflictEntries) {
         if (e.type === 'settings' && e.local && e.remote) {
             // Field-level merge attempt
             try {
@@ -445,19 +471,38 @@ export async function runSync(opts: SyncRunOptions): Promise<{ message: string }
                     local.items[e.id] = { ...e.local, hash, size: bytes.byteLength };
                     e.action = 'push';
                     e.local = local.items[e.id];
-                    continue;
                 }
             } catch (err) {
                 console.error(LOG_PREFIX, 'settings merge failed', err);
             }
         }
+    }
 
-        const choice = opts.resolveConflict
-            ? await opts.resolveConflict(e)
-            : 'both';
-        if (choice === 'local') e.action = 'push';
-        else if (choice === 'remote') e.action = 'pull';
-        // both stays conflict → keep_both in plan
+    const stillConflicted = entries.filter((e) => e.action === 'conflict');
+    if (stillConflicted.length) {
+        let choices = new Map<string, ConflictChoice>();
+        if (opts.resolveConflicts) {
+            choices = await opts.resolveConflicts(stillConflicted, opts.direction);
+        } else if (opts.resolveConflict) {
+            for (const e of stillConflicted) {
+                choices.set(e.id, await opts.resolveConflict(e));
+            }
+        } else {
+            // Safe default: never mass-overwrite from a possibly incomplete device
+            const fallback: ConflictChoice =
+                opts.direction === 'pull' ? 'remote' : 'skip';
+            for (const e of stillConflicted) choices.set(e.id, fallback);
+        }
+
+        for (const e of stillConflicted) {
+            const fallback: ConflictChoice =
+                opts.direction === 'pull' ? 'remote' : 'skip';
+            const choice = choices.get(e.id) || fallback;
+            if (choice === 'local') e.action = 'push';
+            else if (choice === 'remote') e.action = 'pull';
+            else if (choice === 'skip') e.action = 'in_sync'; // leave server + local as-is this run
+            // both stays conflict → keep_both in plan
+        }
     }
 
     if (opts.direction === 'push') {
@@ -477,6 +522,8 @@ export async function runSync(opts: SyncRunOptions): Promise<{ message: string }
 
     let settingsChanged = false;
     let personasChanged = false;
+    const pullAppliedIds = new Set<string>();
+    let pullSkipped = 0;
 
     await applyOp(plan, {
         dryRun: !!opts.dryRun,
@@ -496,6 +543,7 @@ export async function runSync(opts: SyncRunOptions): Promise<{ message: string }
                 boxed = await getRemoteBlob(adapter, hash);
             } catch (e) {
                 if (isBlobMissingError(e)) {
+                    pullSkipped++;
                     console.error(LOG_PREFIX, `Skipping pull ${id}: blob ${hash} not on server`, e);
                     toastr.warning(
                         `Skipped ${id} — missing on the server. Push from the device that still has it.`,
@@ -505,14 +553,23 @@ export async function runSync(opts: SyncRunOptions): Promise<{ message: string }
                 }
                 throw e;
             }
-            const plain = await maybeDecrypt(boxed, hash);
+            let plain: Uint8Array;
+            try {
+                plain = await maybeDecrypt(boxed, hash);
+            } catch (e) {
+                pullSkipped++;
+                console.error(LOG_PREFIX, `Skipping pull ${id}: decrypt/hash failed`, e);
+                toastr.warning(
+                    `Skipped ${id} — could not read server copy (wrong key or corrupt).`,
+                    'TavernSync',
+                );
+                return;
+            }
             await storeBlob(hash, plain);
             if (type === 'settings') {
                 settingsChanged = true;
                 // Merge pulled stripped settings into live settings carefully
                 const pulled = JSON.parse(new TextDecoder().decode(plain)) as Record<string, unknown>;
-                const live = { ...SillyTavern.getContext().extensionSettings } as unknown as Record<string, unknown>;
-                // Better: fetch full settings, merge pulled keys onto live file
                 const raw = await stFetchJson<{ settings: string }>('/api/settings/get', {});
                 const full = JSON.parse(raw.settings || '{}') as Record<string, unknown>;
                 const merged = { ...full, ...pulled };
@@ -526,13 +583,24 @@ export async function runSync(opts: SyncRunOptions): Promise<{ message: string }
                 if (type === 'persona') personasChanged = true;
                 await applyLocalItem(id, type, plain, !!opts.dryRun);
             }
+            pullAppliedIds.add(id);
         },
         keepBoth: async (id, type) => {
             const entry = entries.find((x) => x.id === id);
             if (!entry?.remote) return;
             const sibling = conflictSiblingId(id, s.deviceName || 'remote');
-            const boxed = await getRemoteBlob(adapter, entry.remote.hash);
-            const plain = await maybeDecrypt(boxed, entry.remote.hash);
+            let plain: Uint8Array;
+            try {
+                const boxed = await getRemoteBlob(adapter, entry.remote.hash);
+                plain = await maybeDecrypt(boxed, entry.remote.hash);
+            } catch (e) {
+                console.error(LOG_PREFIX, 'keep_both: could not fetch remote', id, e);
+                toastr.warning(
+                    `Could not save a second copy of ${id} (missing/broken on server). Your local file is unchanged.`,
+                    'TavernSync',
+                );
+                return;
+            }
             await storeBlob(entry.remote.hash, plain);
 
             if (type === 'chat') {
@@ -612,9 +680,34 @@ export async function runSync(opts: SyncRunOptions): Promise<{ message: string }
             throw err;
         }
     } else if (!opts.dryRun && opts.direction === 'pull') {
-        // After successful pull, base = remote
         if (remote) {
-            await saveBase({ manifest: remote, syncedAt: Date.now(), remoteVersion });
+            if (pullSkipped > 0) {
+                // Do NOT adopt full remote as base — that makes an incomplete device look "synced"
+                // and a later Push can overwrite the server with partial data.
+                const prev = await loadBase();
+                const mergedItems: Record<string, SyncItem> = { ...(prev?.manifest.items || {}) };
+                for (const id of pullAppliedIds) {
+                    const item = remote.items[id];
+                    if (item) mergedItems[id] = item;
+                }
+                await saveBase({
+                    manifest: {
+                        ...(prev?.manifest || emptyManifest(s.deviceName || 'device', remoteVersion)),
+                        items: mergedItems,
+                        updatedAt: Date.now(),
+                    },
+                    syncedAt: Date.now(),
+                    remoteVersion,
+                });
+                toastr.warning(
+                    `Pull incomplete (${pullSkipped} skipped). Baseline only updated for items that landed. ` +
+                    `Do not Push from this device as the source of truth until a clean Pull succeeds.`,
+                    'TavernSync',
+                    { timeOut: 12000 },
+                );
+            } else {
+                await saveBase({ manifest: remote, syncedAt: Date.now(), remoteVersion });
+            }
         }
     }
 

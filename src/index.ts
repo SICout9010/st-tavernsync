@@ -245,10 +245,7 @@ async function handlePush(): Promise<void> {
             runSync({
                 direction: 'push',
                 onProgress: (m) => setStatusLine(m),
-                resolveConflict: async (entry) => {
-                    const map = await promptConflicts([entry]);
-                    return map.get(entry.id) || 'both';
-                },
+                resolveConflicts: (entries, direction) => promptConflicts(entries, direction),
             }),
         );
         setStatusLine(message);
@@ -266,10 +263,7 @@ async function handlePull(): Promise<void> {
             runSync({
                 direction: 'pull',
                 onProgress: (m) => setStatusLine(m),
-                resolveConflict: async (entry) => {
-                    const map = await promptConflicts([entry]);
-                    return map.get(entry.id) || 'both';
-                },
+                resolveConflicts: (entries, direction) => promptConflicts(entries, direction),
             }),
         );
         setStatusLine(message);

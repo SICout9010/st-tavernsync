@@ -2,66 +2,121 @@
 
 [ภาษาไทย](README.md) · [For developers](README_DEV.md)
 
-Sync your SillyTavern characters, chats, lorebooks, and settings across computers — upload from one machine, download on another, on your terms.
+Sync SillyTavern characters, chats, lorebooks, presets, personas, and settings **across devices** — Push from one machine, Pull on another, on a server you control.
+
+**End-to-end encryption (E2EE) is on by default** so a server operator can’t easily read your content. That privacy comes with real setup and conflict-handling tradeoffs (see below).
 
 ## Who this is for
 
-If you already use **one** SillyTavern from every device (phone, laptop, whatever), you probably **don’t need this**. That’s the simpler setup.
+If you already use **one** SillyTavern from every device (phone, laptop, tunnel, etc.), you probably **don’t need this**.
 
-TavernSync is for when you actually run SillyTavern in more than one place — home PC and travel laptop, offline trips, or you just don’t want your stories living only on someone else’s server.
+TavernSync is for when you run SillyTavern in more than one place — home PC ↔ travel laptop, offline trips, or you don’t want your stories living only on someone else’s host.
 
 ## Install
 
-No Node, no build steps. Just install the extension.
+No Node, no build. Just install the extension.
 
 1. In SillyTavern open **Extensions** → **Install extension**
 2. Paste: `https://github.com/SICout9010/st-tavernsync`  
    (if you see **Install for all users**, pick that)
-3. Enable **TavernSync** in the extension list
+3. Enable **TavernSync**
 4. Open the Extensions settings panel (right side) and find **TavernSync**
 
-## What to fill in
+## Getting started
 
-You need a place for the synced data to live (see the next section). Then fill in:
+### 1) You need a sync server
+
+Right now you host your own backend (Cloudflare Worker in [`worker/`](worker/)). There is no Managed “click and go” option yet.  
+Deploy steps: [README_DEV.md](README_DEV.md) and [`worker/README.md`](worker/README.md).
+
+### 2) Fill in the panel (every device)
 
 | Field | What to put |
 |-------|-------------|
-| **Endpoint** | The URL of your sync server (for example your deployed Worker URL). No slash at the end. |
-| **Device name** | A nickname for this computer, like `home-pc` or `laptop`. Use a different name on each machine. |
-| **Device token** | A secret password this machine uses to talk to the server. Machines that should share the same data use the **same** token. |
+| **Server URL** | Your worker URL, e.g. `https://xxxx.workers.dev` — **no trailing slash** |
+| **Device name** | A label for this machine, e.g. `home-pc` / `phone` (different per device) |
+| **Sync token** | Shared secret for this sync account — **not** your SillyTavern login password |
 
-If encryption is on (it is by default):
+Click **Test** to confirm the connection.
 
-1. Choose a passphrase you’ll actually keep safe
-2. Check the “I’ve saved it” box
-3. Click **Unlock**
-4. Click **Connect** to make sure it works
-5. Click **Rebuild local index** once
-6. Then **Push** (send up) or **Pull** (bring down)
+### 3) Unlock encryption (once per device)
 
-Chat shortcuts: `/sync-status` · `/sync-push` · `/sync-pull`
+E2EE is **on by default**.
 
-## Where the data goes
+1. Pick a **passphrase** (same on every device) and write it down somewhere safe  
+2. Enter it → check **I've saved my passphrase** → click **Unlock**  
+3. After that, this browser remembers the derived key (no unlock on every refresh)  
+4. Optional: enable **Ask for passphrase after every refresh** if you want the paranoid mode  
 
-The extension doesn’t keep your full library by itself — it talks to a sync server you point it at.
+**Lose the passphrase and the encrypted copy on the server is basically gone.** Keep local backups.
 
-Right now the main option is hosting the included Cloudflare backend yourself (see [`worker/`](worker/README.md) and the [developer guide](README_DEV.md)). Someone else’s compatible server works too, if you have one.
+### 4) First sync (recommended)
 
-Without an Endpoint you can still open the settings panel, but Push / Pull won’t work yet.
+Assume the **PC has the complete library**:
 
-## Safety, in plain words
+1. On the source device → **↑ Push**  
+2. On the other device → same URL / token / passphrase → Unlock → **↓ Pull**  
+3. If it asks to reload after settings/personas — reload  
 
-- **Model API keys are never synced** — on purpose.
-- End-to-end encryption means the server host shouldn’t be able to read your chats easily. **Lose the passphrase and the copy on the server is basically gone.**
-- Your device token lives on your machine — don’t post it publicly.
-- “Propagate deletions” stays **off** by default so a sync bug doesn’t wipe stories on other devices.
+Chat shortcuts: `/sync-push` · `/sync-pull` · `/sync-status`
 
-## If something goes wrong
+## Main buttons
 
-1. Before a big Pull, back up your local SillyTavern data folder
-2. Lost passphrase → rely on a local backup, not the server copy alone
-3. **Reset sync state** only clears sync bookkeeping in the browser — it doesn’t delete your characters or chats in SillyTavern
-4. After pulling settings, if it asks you to reload the page — do it
+| Button | Meaning |
+|--------|---------|
+| **Push** | Upload this device to the server |
+| **Pull** | Download from the server to this device |
+| **Check status** | Compare with the server (runs a scan) |
+| **Rescan this device** | Manual full local scan |
+| **Lock this device** | Forget the remembered key; unlock again to sync |
+| **Wipe server sync data** | Clear the server index (does not delete your local ST files) |
+
+Opening the TavernSync drawer runs a **quiet** background scan (no toast spam).
+
+## Conflicts — what to click
+
+A conflict means both this device and the server changed the same item (or the sync baseline drifted).
+
+On **Push**, if many items conflict:
+
+1. **OK = Skip conflicts (safe)** — only upload non-conflicting items; do **not** mass-overwrite the server  
+2. Cancel → optional **Force overwrite** — only if you are sure **this device is the complete source of truth**  
+3. Or choose per item: this device / server / keep both / skip  
+
+**Never force-overwrite from a device that just had an incomplete Pull.**  
+Bad path: PC Push (good) → phone Pull misses blobs → phone Push overwrites server → PC Pull → data loss.
+
+If Pull skips items or can’t decrypt them, you’ll get a warning that the baseline is incomplete — **don’t treat that device as Push source of truth** until a clean Pull works, or Wipe the server and Push from the good machine.
+
+**Keep both** (especially chats) keeps your local copy and saves the server copy under a sibling name like `(conflict DATE device)`.
+
+## The E2EE tradeoff (honest)
+
+Community feedback prefers privacy by default. That means more moving parts:
+
+| You get | You pay |
+|---------|---------|
+| Server operator can’t easily read chats | Passphrase + unlock at least once per device |
+| Blobs on R2 are ciphertext | Lost passphrase ≈ lost server copy |
+| Remembered device key (no unlock every refresh) | Derived key lives in the browser — protects against the **server/network**, not other extensions on the same profile |
+
+You can turn encryption off for simpler self-hosted use, knowing the host can read stored content.
+
+## What syncs
+
+Settings · Characters · Chats · Lorebooks · Presets · Personas · Groups · (Themes / Quick replies apply path still incomplete)
+
+**Model API keys are never synced** — on purpose.
+
+**Delete on other devices too** stays **off** by default.
+
+## If something breaks
+
+1. Before a big Pull, back up your SillyTavern data folder  
+2. Lost passphrase → rely on local backups  
+3. **Reset sync on this device** clears browser sync bookkeeping only — not your ST library  
+4. Corrupt remote index / missing blobs → **Wipe server sync data**, then Push from the machine that has the real data  
+5. Browser console lines prefixed `[TavernSync]`
 
 ## License
 
@@ -69,4 +124,4 @@ Without an Endpoint you can still open the settings panel, but Push / Pull won�
 
 ---
 
-Hacking on the code, fixing bugs, or deploying the backend? See [README_DEV.md](README_DEV.md).
+Coding, tests, or deploying the backend → [README_DEV.md](README_DEV.md)

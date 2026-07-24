@@ -84,15 +84,21 @@ export default {
                 const hash = blobMatch[1].toLowerCase();
                 const key = `u/${userId}/b/${hash}`;
                 if (request.method === 'GET') {
-                    const obj = await env.BLOBS.get(key);
-                    if (!obj) return json({ error: 'not_found' }, 404);
-                    return new Response(obj.body, {
-                        headers: {
-                            ...corsHeaders(),
-                            'Content-Type': 'application/octet-stream',
-                            'Cache-Control': 'immutable',
-                        },
-                    });
+                    try {
+                        const obj = await env.BLOBS.get(key);
+                        if (!obj) return json({ error: 'not_found' }, 404);
+                        const bytes = await obj.arrayBuffer();
+                        return new Response(bytes, {
+                            headers: {
+                                ...corsHeaders(),
+                                'Content-Type': 'application/octet-stream',
+                                'Cache-Control': 'immutable',
+                            },
+                        });
+                    } catch (e) {
+                        console.error('blob GET failed', key, e);
+                        return json({ error: 'blob_read_failed', detail: String(e) }, 404);
+                    }
                 }
                 if (request.method === 'PUT') {
                     const data = new Uint8Array(await request.arrayBuffer());
