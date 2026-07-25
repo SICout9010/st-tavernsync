@@ -358,6 +358,50 @@ export async function getStatusDiff(): Promise<{
     };
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Merge stripped remote settings onto live settings.json.
+ * Personas are synced as persona/* items and applied before settings — a shallow
+ * `{...full, ...pulled}` would replace power_user and wipe names/descriptions
+ * while leaving avatar PNGs on disk (exactly "image but no persona data").
+ */
+export function mergePulledSettings(
+    live: Record<string, unknown>,
+    pulled: Record<string, unknown>,
+): Record<string, unknown> {
+    const merged: Record<string, unknown> = { ...live, ...pulled };
+
+    if (isPlainObject(live.power_user) || isPlainObject(pulled.power_user)) {
+        const livePu = isPlainObject(live.power_user) ? live.power_user : {};
+        const pulledPu = isPlainObject(pulled.power_user) ? pulled.power_user : {};
+        merged.power_user = {
+            ...livePu,
+            ...pulledPu,
+            // Always keep whatever is live after persona/* apply (or pre-existing)
+            personas: livePu.personas ?? pulledPu.personas,
+            persona_descriptions: livePu.persona_descriptions ?? pulledPu.persona_descriptions,
+            default_persona: livePu.default_persona ?? pulledPu.default_persona,
+        };
+    }
+
+    if (!merged.extensionSettings || typeof merged.extensionSettings !== 'object') {
+        merged.extensionSettings = {};
+    }
+    const liveExt = isPlainObject(live.extensionSettings) ? live.extensionSettings : {};
+    const pulledExt = isPlainObject(pulled.extensionSettings) ? pulled.extensionSettings : {};
+    const mergedExt = {
+        ...liveExt,
+        ...pulledExt,
+        tavernsync: liveExt.tavernsync ?? getSettings(),
+    };
+    merged.extensionSettings = mergedExt;
+
+    return merged;
+}
+
 async function resolveChatConflict(
     id: string,
     localHash: string,
@@ -568,16 +612,10 @@ export async function runSync(opts: SyncRunOptions): Promise<{ message: string }
             await storeBlob(hash, plain);
             if (type === 'settings') {
                 settingsChanged = true;
-                // Merge pulled stripped settings into live settings carefully
                 const pulled = JSON.parse(new TextDecoder().decode(plain)) as Record<string, unknown>;
                 const raw = await stFetchJson<{ settings: string }>('/api/settings/get', {});
                 const full = JSON.parse(raw.settings || '{}') as Record<string, unknown>;
-                const merged = { ...full, ...pulled };
-                // Preserve local tavernsync settings
-                if (!merged.extensionSettings) merged.extensionSettings = {};
-                (merged.extensionSettings as Record<string, unknown>).tavernsync =
-                    (full.extensionSettings as Record<string, unknown>)?.tavernsync
-                    ?? getSettings();
+                const merged = mergePulledSettings(full, pulled);
                 await applyLocalItem(id, type, new TextEncoder().encode(JSON.stringify(merged)), !!opts.dryRun);
             } else {
                 if (type === 'persona') personasChanged = true;

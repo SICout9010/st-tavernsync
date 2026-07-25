@@ -81,7 +81,7 @@ export function buildPlan(entries: DiffEntry[], opts: PlanOptions): ApplyOp[] {
     return ops;
 }
 
-/** Pull apply order from CONTEXT §5. */
+/** Pull apply order from CONTEXT §5. Personas after settings so settings merge can't wipe them. */
 export const PULL_TYPE_ORDER = [
     'worldinfo',
     'preset',
@@ -89,10 +89,10 @@ export const PULL_TYPE_ORDER = [
     'chat',
     'group',
     'groupchat',
-    'persona',
     'quickreply',
     'theme',
     'settings',
+    'persona',
 ] as const;
 
 export function sortPullOps(ops: ApplyOp[]): ApplyOp[] {

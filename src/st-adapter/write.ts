@@ -70,8 +70,9 @@ export async function writePersona(payload: PersonaPayload): Promise<void> {
     const avatarId = payload.avatarId;
     if (!avatarId) throw new Error('Persona payload missing avatarId');
 
+    let key = avatarId;
     if (payload.imageBase64) {
-        await uploadPersonaAvatar(base64ToUint8(payload.imageBase64), avatarId);
+        key = await uploadPersonaAvatar(base64ToUint8(payload.imageBase64), avatarId);
     }
 
     const raw = await stFetchJson<{ settings: string }>('/api/settings/get', {});
@@ -87,11 +88,11 @@ export async function writePersona(payload: PersonaPayload): Promise<void> {
         ? power.persona_descriptions
         : {}) as Record<string, Record<string, unknown>>;
 
-    personas[avatarId] = payload.name || avatarId;
+    personas[key] = payload.name || key;
     if (payload.description) {
-        descriptions[avatarId] = payload.description;
-    } else if (!descriptions[avatarId]) {
-        descriptions[avatarId] = {
+        descriptions[key] = payload.description;
+    } else if (!descriptions[key]) {
+        descriptions[key] = {
             description: '',
             position: 0,
             depth: 2,
@@ -99,6 +100,12 @@ export async function writePersona(payload: PersonaPayload): Promise<void> {
             lorebook: '',
             title: '',
         };
+    }
+
+    // If upload renamed the file, drop stale key from an older avatarId
+    if (key !== avatarId) {
+        delete personas[avatarId];
+        delete descriptions[avatarId];
     }
 
     power.personas = personas;
