@@ -71,6 +71,7 @@ declare global {
             SETTINGS_UPDATED?: string;
             GENERATION_STARTED?: string;
             GENERATION_ENDED?: string;
+            GENERATION_STOPPED?: string;
         };
         SlashCommandParser?: {
             addCommandObject: (command: unknown) => void;

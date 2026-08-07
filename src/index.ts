@@ -508,8 +508,23 @@ function registerEventListeners(): void {
 
     const genStart = event_types.GENERATION_STARTED ?? 'generation_started';
     const genEnd = event_types.GENERATION_ENDED ?? 'generation_ended';
-    eventSource.on(genStart, () => setGenerationBusy(true));
+    const genStopped = event_types.GENERATION_STOPPED ?? 'generation_stopped';
+    // ST emits GENERATION_STARTED for real generations *and* for Prompt Manager
+    // dry runs (openai.js: promptManager.tryGenerate -> Generate('normal', {}, true)),
+    // passing dryRun as the 3rd listener argument. A dry run never shows the stop
+    // button, and GENERATION_ENDED is only emitted from hideStopButton() when that
+    // button was visible — so a dry run gives us "started" with no "ended" and the
+    // lock stays set forever, surviving reloads because the dry run repeats on boot.
+    eventSource.on(genStart, (...args: unknown[]) => {
+        if (args[2] === true) return;
+        setGenerationBusy(true);
+    });
     eventSource.on(genEnd, () => setGenerationBusy(false));
+    // stopGeneration() always emits GENERATION_STOPPED but only reaches
+    // hideStopButton() (and therefore GENERATION_ENDED) on the abortController
+    // branch; onStopStreaming() never emits it. Without this listener, stopping a
+    // stream mid-flight leaves the lock set.
+    eventSource.on(genStopped, () => setGenerationBusy(false));
 
     // Chat close approximation: CHAT_CHANGED after leaving a chat
     const chatChanged = event_types.CHAT_CHANGED ?? 'chat_changed';

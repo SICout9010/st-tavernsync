@@ -28,14 +28,26 @@ export type ConflictChoice = 'local' | 'remote' | 'both' | 'skip';
 
 let sessionKey: CryptoKey | null = null;
 let sessionPassphrase: string | null = null;
-let generating = false;
+/** Timestamp (ms) when generation started, 0 when idle.
+ *  Stored as a timestamp rather than a boolean so the lock can self-heal if a
+ *  matching "generation ended" event never arrives. */
+let generatingSince = 0;
+
+/** A single generation should never outlast this — past it, assume the end
+ *  event was lost and unblock rather than staying stuck forever. */
+const GENERATION_LOCK_MAX_MS = 5 * 60_000;
 
 export function setGenerationBusy(busy: boolean): void {
-    generating = busy;
+    generatingSince = busy ? Date.now() : 0;
 }
 
 export function isGenerationBusy(): boolean {
-    return generating;
+    if (!generatingSince) return false;
+    if (Date.now() - generatingSince >= GENERATION_LOCK_MAX_MS) {
+        generatingSince = 0;
+        return false;
+    }
+    return true;
 }
 
 export async function loadBase(): Promise<BaseState | null> {
