@@ -573,13 +573,44 @@ export async function runSync(opts: SyncRunOptions): Promise<{ message: string }
         dryRun: !!opts.dryRun,
         log: (msg, meta) => console.log(LOG_PREFIX, msg, meta ?? ''),
         pushBlob: async (id, hash) => {
-            let data = await loadBlob(hash);
-            if (!data || data.byteLength === 0) {
-                throw new Error(`Missing local blob for ${id} (${hash})`);
-            }
-            data = await maybeEncrypt(data);
+            // Fallback if pushBlobs is unavailable — still one-at-a-time.
             const key = await blobStorageKey(hash);
-            await uploadBlobsParallel(adapter, [{ hash: key, data }]);
+            await uploadBlobsParallel(adapter, [key], async () => {
+                let data = await loadBlob(hash);
+                if (!data || data.byteLength === 0) {
+                    throw new Error(`Missing local blob for ${id} (${hash})`);
+                }
+                return maybeEncrypt(data);
+            });
+        },
+        pushBlobs: async (items) => {
+            // Dedupe by plaintext hash; map storage key → local hash for load.
+            const byPlain = new Map<string, string>(); // plaintextHash → id
+            for (const item of items) {
+                if (!byPlain.has(item.hash)) byPlain.set(item.hash, item.id);
+            }
+            const keyed = await Promise.all(
+                [...byPlain.entries()].map(async ([plainHash, id]) => ({
+                    storageKey: await blobStorageKey(plainHash),
+                    plainHash,
+                    id,
+                })),
+            );
+            const byStorage = new Map(keyed.map((k) => [k.storageKey, k]));
+            progress(`Uploading ${keyed.length} blob(s) (up to 4 parallel, lazy load)…`);
+            await uploadBlobsParallel(
+                adapter,
+                keyed.map((k) => k.storageKey),
+                async (storageKey) => {
+                    const meta = byStorage.get(storageKey)!;
+                    let data = await loadBlob(meta.plainHash);
+                    if (!data || data.byteLength === 0) {
+                        throw new Error(`Missing local blob for ${meta.id} (${meta.plainHash})`);
+                    }
+                    return maybeEncrypt(data);
+                },
+                4,
+            );
         },
         pullAndApply: async (id, type, hash) => {
             let boxed: Uint8Array;
@@ -675,16 +706,19 @@ export async function runSync(opts: SyncRunOptions): Promise<{ message: string }
             }
         }
 
-        // Drop entries whose blobs are missing under both HMAC key and plaintext hash
+        // Drop entries whose blobs are missing (one batched checkBlobs, not N round-trips)
         const dropped: string[] = [];
-        for (const [id, item] of Object.entries(newItems)) {
-            const keyed = await blobStorageKey(item.hash);
-            const missing = await adapter.checkBlobs(
-                keyed === item.hash ? [item.hash] : [keyed, item.hash],
-            );
-            const hasBlob = keyed === item.hash
-                ? !missing.includes(item.hash)
-                : !(missing.includes(keyed) && missing.includes(item.hash));
+        const idHashes = await Promise.all(
+            Object.entries(newItems).map(async ([id, item]) => {
+                const keyed = await blobStorageKey(item.hash);
+                const candidates = keyed === item.hash ? [item.hash] : [keyed, item.hash];
+                return { id, candidates };
+            }),
+        );
+        const allHashes = [...new Set(idHashes.flatMap((x) => x.candidates))];
+        const missingSet = new Set(allHashes.length ? await adapter.checkBlobs(allHashes) : []);
+        for (const { id, candidates } of idHashes) {
+            const hasBlob = candidates.some((h) => !missingSet.has(h));
             if (!hasBlob) {
                 delete newItems[id];
                 dropped.push(id);

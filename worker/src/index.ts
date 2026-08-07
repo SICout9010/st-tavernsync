@@ -70,13 +70,13 @@ export default {
 
             if (url.pathname === '/v1/blobs/check' && request.method === 'POST') {
                 const { hashes } = await request.json() as { hashes: string[] };
-                const missing: string[] = [];
-                for (const hash of hashes || []) {
+                const list = hashes || [];
+                const flags = await Promise.all(list.map(async (hash) => {
                     const key = `u/${userId}/b/${hash}`;
                     const head = await env.BLOBS.head(key);
-                    if (!head) missing.push(hash);
-                }
-                return json({ missing });
+                    return head ? null : hash;
+                }));
+                return json({ missing: flags.filter((h): h is string => h != null) });
             }
 
             const blobMatch = /^\/v1\/blobs\/([a-f0-9]+)$/i.exec(url.pathname);

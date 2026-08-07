@@ -1,6 +1,7 @@
 import { ConflictError, type StorageAdapter } from './adapter';
 import type { Manifest } from '../sync-core/types';
 import { LOG_PREFIX } from '../settings';
+import { mapPool } from '../util/pool';
 
 export interface HttpAdapterOptions {
     endpoint: string;
@@ -147,34 +148,35 @@ export class HttpStorageAdapter implements StorageAdapter {
     }
 }
 
-/** Upload missing blobs with concurrency cap 4 + simple backoff. */
+/**
+ * Upload missing blobs with concurrency cap 4 + simple backoff.
+ * Dedupes hashes. Loads/encrypts lazily inside each worker via `load`
+ * so peak RAM stays ~concurrency files, not the whole batch.
+ */
 export async function uploadBlobsParallel(
     adapter: StorageAdapter,
-    entries: { hash: string; data: Uint8Array }[],
+    hashes: string[],
+    load: (hash: string) => Promise<Uint8Array>,
     concurrency = 4,
 ): Promise<void> {
-    const missing = await adapter.checkBlobs(entries.map((e) => e.hash));
-    const need = new Set(missing);
-    const queue = entries.filter((e) => need.has(e.hash));
+    if (hashes.length === 0) return;
 
-    let i = 0;
-    async function worker() {
-        while (i < queue.length) {
-            const idx = i++;
-            const entry = queue[idx];
-            let attempt = 0;
-            for (;;) {
-                try {
-                    await adapter.putBlob(entry.hash, entry.data);
-                    break;
-                } catch (e) {
-                    attempt++;
-                    if (attempt >= 3) throw e;
-                    await new Promise((r) => setTimeout(r, 250 * 2 ** attempt));
-                }
+    const unique = [...new Set(hashes)];
+    const missing = await adapter.checkBlobs(unique);
+    if (missing.length === 0) return;
+
+    await mapPool(missing, concurrency, async (hash) => {
+        const data = await load(hash);
+        let attempt = 0;
+        for (;;) {
+            try {
+                await adapter.putBlob(hash, data);
+                return;
+            } catch (e) {
+                attempt++;
+                if (attempt >= 3) throw e;
+                await new Promise((r) => setTimeout(r, 250 * 2 ** attempt));
             }
         }
-    }
-
-    await Promise.all(Array.from({ length: Math.min(concurrency, queue.length || 1) }, () => worker()));
+    });
 }
