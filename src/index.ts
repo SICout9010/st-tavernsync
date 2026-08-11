@@ -153,7 +153,7 @@ async function handleConnect(): Promise<void> {
         const { version } = await adapter.getManifest();
         const quota = await adapter.quota();
         $('#tavernsync_quota_line').text(
-            `Storage: ${formatBytes(quota.usedBytes)} / ${formatBytes(quota.limitBytes)} · ${quota.itemCount} files`,
+            `Storage: ${formatBytes(quota.usedBytes)} · ${quota.itemCount} files`,
         );
         toastr.success(`Connected (v${version}).`, 'TavernSync');
     } catch (e) {

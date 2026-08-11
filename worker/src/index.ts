@@ -2,18 +2,32 @@
  * TavernSync Cloudflare Worker — Durable Object for manifest CAS + R2 blobs.
  *
  * Auth: Authorization: Bearer <deviceToken>
- * Tokens are mapped to userId via env binding KV or hardcoded demo map for self-host.
+ * Soft R2 budgets (Storage / Class A / Class B) with Discord operator alerts — never blocks sync.
  */
 
 export interface Env {
     MANIFEST_DO: DurableObjectNamespace;
     BLOBS: R2Bucket;
     USER_TOKENS: KVNamespace;
-    DEFAULT_QUOTA_BYTES: string;
+    /** @deprecated use SOFT_STORAGE_BYTES */
+    DEFAULT_QUOTA_BYTES?: string;
+    SOFT_STORAGE_BYTES?: string;
+    SOFT_CLASS_A_MONTHLY?: string;
+    SOFT_CLASS_B_MONTHLY?: string;
+    /** Operator Discord webhook; empty = metering only */
+    DISCORD_WEBHOOK_URL?: string;
 }
 
 const MAX_BLOB = 25 * 1024 * 1024;
 const MAX_MANIFEST = 2 * 1024 * 1024;
+const DEFAULT_SOFT_STORAGE = 50 * 1024 * 1024 * 1024; // 50 GiB
+const DEFAULT_SOFT_CLASS_A = 100_000;
+const DEFAULT_SOFT_CLASS_B = 1_000_000;
+const ALERT_LEVELS = [70, 90, 100] as const;
+
+type Meter = 'storage' | 'classA' | 'classB';
+type AlertsSent = Partial<Record<Meter, number>>;
+type MonthOps = { classA: number; classB: number };
 
 function corsHeaders(): HeadersInit {
     return {
@@ -39,8 +53,55 @@ function doStub(env: Env, userId: string): DurableObjectStub {
     return env.MANIFEST_DO.get(id);
 }
 
+function utcPeriod(d = new Date()): string {
+    return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+}
+
+function softLimits(env: Env): { storageBytes: number; classA: number; classB: number } {
+    const storageBytes = Number(
+        env.SOFT_STORAGE_BYTES
+        || env.DEFAULT_QUOTA_BYTES
+        || DEFAULT_SOFT_STORAGE,
+    );
+    return {
+        storageBytes: Number.isFinite(storageBytes) && storageBytes > 0 ? storageBytes : DEFAULT_SOFT_STORAGE,
+        classA: Math.max(1, Number(env.SOFT_CLASS_A_MONTHLY || DEFAULT_SOFT_CLASS_A) || DEFAULT_SOFT_CLASS_A),
+        classB: Math.max(1, Number(env.SOFT_CLASS_B_MONTHLY || DEFAULT_SOFT_CLASS_B) || DEFAULT_SOFT_CLASS_B),
+    };
+}
+
+function levelForPct(pct: number): number {
+    let level = 0;
+    for (const t of ALERT_LEVELS) {
+        if (pct >= t) level = t;
+    }
+    return level;
+}
+
+function pctOf(used: number, limit: number): number {
+    if (limit <= 0) return 0;
+    return (used / limit) * 100;
+}
+
+/** Fire-and-forget usage accounting + soft-limit Discord alerts. */
+async function recordUsage(
+    env: Env,
+    ctx: ExecutionContext,
+    userId: string,
+    body: { classA?: number; classB?: number; hash?: string; size?: number },
+): Promise<void> {
+    const p = doStub(env, userId).fetch('https://do/usage-incr', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId, ...body }),
+    });
+    ctx.waitUntil(p.then(async (res) => {
+        if (!res.ok) console.error('usage-incr failed', userId, res.status, await res.text().catch(() => ''));
+    }).catch((e) => console.error('usage-incr error', userId, e)));
+}
+
 export default {
-    async fetch(request: Request, env: Env): Promise<Response> {
+    async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
         if (request.method === 'OPTIONS') {
             return new Response(null, { status: 204, headers: corsHeaders() });
         }
@@ -76,6 +137,9 @@ export default {
                     const head = await env.BLOBS.head(key);
                     return head ? null : hash;
                 }));
+                if (list.length) {
+                    await recordUsage(env, ctx, userId, { classB: list.length });
+                }
                 return json({ missing: flags.filter((h): h is string => h != null) });
             }
 
@@ -88,6 +152,7 @@ export default {
                         const obj = await env.BLOBS.get(key);
                         if (!obj) return json({ error: 'not_found' }, 404);
                         const bytes = await obj.arrayBuffer();
+                        await recordUsage(env, ctx, userId, { classB: 1 });
                         return new Response(bytes, {
                             headers: {
                                 ...corsHeaders(),
@@ -104,11 +169,16 @@ export default {
                     const data = new Uint8Array(await request.arrayBuffer());
                     if (data.byteLength > MAX_BLOB) return json({ error: 'blob_too_large' }, 413);
                     await env.BLOBS.put(key, data);
-                    // Notify DO for quota accounting
-                    await doStub(env, userId).fetch('https://do/blob-put', {
+                    // Await size + soft-limit accounting (Discord alerts deduped inside DO).
+                    await doStub(env, userId).fetch('https://do/usage-incr', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ hash, size: data.byteLength }),
+                        body: JSON.stringify({
+                            userId,
+                            classA: 1,
+                            hash,
+                            size: data.byteLength,
+                        }),
                     });
                     return json({ ok: true });
                 }
@@ -194,7 +264,6 @@ export class ManifestDO {
             const next = current + 1;
             await this.state.storage.put('manifest', manifest);
             await this.state.storage.put('version', next);
-            // Update referenced blob set for GC
             const items = (manifest as { items?: Record<string, { hash: string }> })?.items || {};
             const hashes = Object.values(items).map((i) => i.hash);
             await this.state.storage.put('blob_hashes', hashes);
@@ -203,24 +272,41 @@ export class ManifestDO {
             });
         }
 
+        if (url.pathname === '/usage-incr' && request.method === 'POST') {
+            const body = await request.json() as {
+                userId?: string;
+                classA?: number;
+                classB?: number;
+                hash?: string;
+                size?: number;
+            };
+            await this.applyUsageIncr(body);
+            return new Response(JSON.stringify({ ok: true }), {
+                headers: { 'Content-Type': 'application/json' },
+            });
+        }
+
+        // Legacy alias — size accounting now goes through /usage-incr
         if (url.pathname === '/blob-put' && request.method === 'POST') {
             const { hash, size } = await request.json() as { hash: string; size: number };
-            const sizes = (await this.state.storage.get<Record<string, number>>('blob_sizes')) || {};
-            sizes[hash] = size;
-            await this.state.storage.put('blob_sizes', sizes);
-            return new Response(JSON.stringify({ ok: true }));
+            await this.applyUsageIncr({ classA: 1, hash, size });
+            return new Response(JSON.stringify({ ok: true }), {
+                headers: { 'Content-Type': 'application/json' },
+            });
         }
 
         if (url.pathname === '/quota' && request.method === 'GET') {
-            const sizes = (await this.state.storage.get<Record<string, number>>('blob_sizes')) || {};
-            const hashes = (await this.state.storage.get<string[]>('blob_hashes')) || [];
-            let used = 0;
-            for (const h of hashes) used += sizes[h] || 0;
-            const limit = Number(this.env.DEFAULT_QUOTA_BYTES || 500 * 1024 * 1024);
+            const snap = await this.usageSnapshot();
             return new Response(JSON.stringify({
-                usedBytes: used,
-                limitBytes: limit,
-                itemCount: hashes.length,
+                // Back-compat for extension Connect line (used + files only on client now)
+                usedBytes: snap.storage.usedBytes,
+                limitBytes: snap.storage.softBytes,
+                itemCount: snap.storage.itemCount,
+                period: snap.period,
+                storage: snap.storage,
+                classA: snap.classA,
+                classB: snap.classB,
+                alerts: snap.alerts,
             }), { headers: { 'Content-Type': 'application/json' } });
         }
 
@@ -237,7 +323,6 @@ export class ManifestDO {
                 return new Response(JSON.stringify({ error: 'e2eeSalt required' }), { status: 400 });
             }
             const existing = await this.state.storage.get<string>('e2eeSalt');
-            // First writer wins — all devices must share the same account salt for HMAC blob keys
             if (existing && existing !== body.e2eeSalt) {
                 return new Response(JSON.stringify({ error: 'salt_exists', e2eeSalt: existing }), { status: 409 });
             }
@@ -250,7 +335,6 @@ export class ManifestDO {
         }
 
         if (url.pathname === '/gc' && request.method === 'POST') {
-            // GC is best-effort; full R2 listing omitted in DO-only stub
             return new Response(JSON.stringify({ ok: true, note: 'gc stub — use external cron for R2 orphans' }), {
                 headers: { 'Content-Type': 'application/json' },
             });
@@ -258,4 +342,189 @@ export class ManifestDO {
 
         return new Response('not found', { status: 404 });
     }
+
+    private async applyUsageIncr(body: {
+        userId?: string;
+        classA?: number;
+        classB?: number;
+        hash?: string;
+        size?: number;
+    }): Promise<void> {
+        if (body.hash && typeof body.size === 'number' && body.size >= 0) {
+            const sizes = (await this.state.storage.get<Record<string, number>>('blob_sizes')) || {};
+            sizes[body.hash] = body.size;
+            await this.state.storage.put('blob_sizes', sizes);
+        }
+
+        const period = utcPeriod();
+        const opsKey = `ops:${period}`;
+        const ops = (await this.state.storage.get<MonthOps>(opsKey)) || { classA: 0, classB: 0 };
+        if (body.classA) ops.classA += body.classA;
+        if (body.classB) ops.classB += body.classB;
+        await this.state.storage.put(opsKey, ops);
+
+        const userId = body.userId || 'unknown';
+        // Await so alerts_sent is updated before the next serialized DO request (dedupe).
+        try {
+            await this.maybeNotifySoftLimits(userId, period, ops);
+        } catch (e) {
+            console.error('soft-limit notify failed', userId, e);
+        }
+    }
+
+    private async storageUsedBytes(): Promise<{ used: number; itemCount: number }> {
+        const sizes = (await this.state.storage.get<Record<string, number>>('blob_sizes')) || {};
+        const hashes = (await this.state.storage.get<string[]>('blob_hashes')) || [];
+        let used = 0;
+        for (const h of hashes) used += sizes[h] || 0;
+        return { used, itemCount: hashes.length };
+    }
+
+    private async usageSnapshot() {
+        const limits = softLimits(this.env);
+        const period = utcPeriod();
+        const ops = (await this.state.storage.get<MonthOps>(`ops:${period}`)) || { classA: 0, classB: 0 };
+        const { used, itemCount } = await this.storageUsedBytes();
+        const storagePct = pctOf(used, limits.storageBytes);
+        const classAPct = pctOf(ops.classA, limits.classA);
+        const classBPct = pctOf(ops.classB, limits.classB);
+        const alerts: { meter: Meter; level: number }[] = [];
+        for (const [meter, pct] of [
+            ['storage', storagePct],
+            ['classA', classAPct],
+            ['classB', classBPct],
+        ] as const) {
+            const level = levelForPct(pct);
+            if (level) alerts.push({ meter, level });
+        }
+        return {
+            period,
+            storage: {
+                usedBytes: used,
+                softBytes: limits.storageBytes,
+                itemCount,
+                pct: storagePct,
+            },
+            classA: { used: ops.classA, softLimit: limits.classA, pct: classAPct },
+            classB: { used: ops.classB, softLimit: limits.classB, pct: classBPct },
+            alerts,
+        };
+    }
+
+    private async maybeNotifySoftLimits(userId: string, period: string, ops: MonthOps): Promise<void> {
+        const webhook = (this.env.DISCORD_WEBHOOK_URL || '').trim();
+        if (!webhook) return;
+
+        const limits = softLimits(this.env);
+        const { used } = await this.storageUsedBytes();
+        const meters: { meter: Meter; used: number; softLimit: number; pct: number; unit: string }[] = [
+            {
+                meter: 'storage',
+                used,
+                softLimit: limits.storageBytes,
+                pct: pctOf(used, limits.storageBytes),
+                unit: 'bytes',
+            },
+            {
+                meter: 'classA',
+                used: ops.classA,
+                softLimit: limits.classA,
+                pct: pctOf(ops.classA, limits.classA),
+                unit: 'ops',
+            },
+            {
+                meter: 'classB',
+                used: ops.classB,
+                softLimit: limits.classB,
+                pct: pctOf(ops.classB, limits.classB),
+                unit: 'ops',
+            },
+        ];
+
+        const alertsKey = `alerts_sent:${period}`;
+        const sent = (await this.state.storage.get<AlertsSent>(alertsKey)) || {};
+        let changed = false;
+
+        for (const m of meters) {
+            const level = levelForPct(m.pct);
+            const prev = sent[m.meter] || 0;
+            if (level > prev) {
+                sent[m.meter] = level;
+                changed = true;
+                await this.postDiscordAlert(webhook, {
+                    userId,
+                    period,
+                    meter: m.meter,
+                    level,
+                    used: m.used,
+                    softLimit: m.softLimit,
+                    pct: m.pct,
+                    unit: m.unit,
+                });
+            }
+        }
+
+        if (changed) {
+            await this.state.storage.put(alertsKey, sent);
+        }
+    }
+
+    private async postDiscordAlert(
+        webhook: string,
+        info: {
+            userId: string;
+            period: string;
+            meter: Meter;
+            level: number;
+            used: number;
+            softLimit: number;
+            pct: number;
+            unit: string;
+        },
+    ): Promise<void> {
+        const labels: Record<Meter, string> = {
+            storage: 'Storage',
+            classA: 'Class A (writes)',
+            classB: 'Class B (reads)',
+        };
+        const color = info.level >= 100 ? 0xe74c3c : info.level >= 90 ? 0xe67e22 : 0xf1c40f;
+        const usedLabel = info.unit === 'bytes'
+            ? `${formatBytes(info.used)} / ${formatBytes(info.softLimit)}`
+            : `${info.used.toLocaleString()} / ${info.softLimit.toLocaleString()} ops`;
+
+        const res = await fetch(webhook, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                embeds: [{
+                    title: `TavernSync soft limit — ${labels[info.meter]} ${info.level}%`,
+                    color,
+                    fields: [
+                        { name: 'userId', value: info.userId, inline: true },
+                        { name: 'period', value: info.period, inline: true },
+                        { name: 'meter', value: labels[info.meter], inline: true },
+                        { name: 'usage', value: usedLabel, inline: true },
+                        { name: 'pct', value: `${info.pct.toFixed(1)}%`, inline: true },
+                    ],
+                    footer: { text: 'Soft limit only — sync is not blocked' },
+                    timestamp: new Date().toISOString(),
+                }],
+            }),
+        });
+        if (!res.ok) {
+            console.error('Discord webhook failed', res.status, await res.text().catch(() => ''));
+        }
+    }
+}
+
+function formatBytes(n: number): string {
+    if (!n) return '0 B';
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    let i = 0;
+    let v = n;
+    while (v >= 1024 && i < units.length - 1) {
+        v /= 1024;
+        i++;
+    }
+    return `${v.toFixed(i ? 1 : 0)} ${units[i]}`;
 }

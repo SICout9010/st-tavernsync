@@ -2,18 +2,24 @@
   // Copy this file to wrangler.jsonc and fill in your own values:
   //   cp wrangler-example.jsonc wrangler.jsonc
   //
-  // wrangler.jsonc is gitignored — do not commit real KV/R2 account ids.
+  // wrangler.jsonc is gitignored — do not commit real KV/R2 account ids or webhooks.
   //
   // Create resources:
   //   npx wrangler kv namespace create USER_TOKENS
   //   (create R2 bucket in dashboard or: npx wrangler r2 bucket create tavernsync-blobs)
+  //
+  // Operator Discord alerts (secret — do not put the real URL in vars):
+  //   npx wrangler secret put DISCORD_WEBHOOK_URL
 
   "name": "tavernsync-worker",
   "main": "src/index.ts",
   "compatibility_date": "2024-11-01",
   "compatibility_flags": ["nodejs_compat"],
   "vars": {
-    "DEFAULT_QUOTA_BYTES": "524288000"
+    // Soft ceilings per sync account (never blocks uploads). Tune to your budget.
+    "SOFT_STORAGE_BYTES": "53687091200",
+    "SOFT_CLASS_A_MONTHLY": "100000",
+    "SOFT_CLASS_B_MONTHLY": "1000000"
   },
   "r2_buckets": [
     {
