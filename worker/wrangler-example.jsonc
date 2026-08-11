@@ -15,6 +15,11 @@
   "main": "src/index.ts",
   "compatibility_date": "2024-11-01",
   "compatibility_flags": ["nodejs_compat"],
+  // Paid Workers: 10k subrequests/invoke (free ~50), CPU up to 5 min
+  "limits": {
+    "cpu_ms": 300000,
+    "subrequests": 10000
+  },
   "vars": {
     // Soft ceilings per sync account (never blocks uploads). Tune to your budget.
     "SOFT_STORAGE_BYTES": "53687091200",

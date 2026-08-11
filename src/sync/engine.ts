@@ -3,7 +3,7 @@
  */
 
 import { ConflictError } from '../backend/adapter';
-import { HttpStorageAdapter, uploadBlobsParallel } from '../backend/http';
+import { BlobTransferError, HttpStorageAdapter, uploadBlobsParallel } from '../backend/http';
 import { decodeSalt, deriveKey, encodeSalt, exportKeyRaw, importAesKey, open, seal } from '../crypto';
 import { LOG_PREFIX, getSettings, saveSettings, type SyncScopeSettings } from '../settings';
 import { loadBlob, loadLocalManifest, scanLocal, storeBlob } from '../st-adapter/scan';
@@ -276,9 +276,41 @@ async function blobStorageKey(plaintextHash: string): Promise<string> {
     return plaintextHash;
 }
 
-async function getRemoteBlob(adapter: HttpStorageAdapter, plaintextHash: string): Promise<Uint8Array> {
+async function getRemoteBlob(
+    adapter: HttpStorageAdapter,
+    plaintextHash: string,
+    item?: { id: string; type: string },
+): Promise<Uint8Array> {
     const key = await blobStorageKey(plaintextHash);
-    return adapter.getBlob(key);
+    return adapter.getBlob(key, item ? { itemId: item.id, itemType: item.type } : undefined);
+}
+
+type PullFailureStage = 'request' | 'response-body' | 'decrypt' | 'store' | 'apply';
+
+function logPullFailure(
+    stage: PullFailureStage,
+    item: { id: string; type: string; hash: string },
+    startedAt: number,
+    error: unknown,
+): void {
+    const transfer = error instanceof BlobTransferError ? error : undefined;
+    const original = transfer?.originalError instanceof Error
+        ? transfer.originalError
+        : error instanceof Error ? error : undefined;
+    console.error(LOG_PREFIX, 'Pull item failed', {
+        operation: 'pull',
+        stage: transfer?.stage ?? stage,
+        hash: item.hash,
+        itemId: item.id,
+        itemType: item.type,
+        elapsedMs: transfer?.elapsedMs ?? Date.now() - startedAt,
+        status: transfer?.status,
+        contentLength: transfer?.contentLength,
+        receivedBytes: transfer?.receivedBytes,
+        cfRay: transfer?.cfRay,
+        errorName: original?.name ?? typeof error,
+        errorMessage: original?.message ?? String(error),
+    });
 }
 
 function isBlobMissingError(e: unknown): boolean {
@@ -627,44 +659,61 @@ export async function runSync(opts: SyncRunOptions): Promise<{ message: string }
             );
         },
         pullAndApply: async (id, type, hash) => {
+            const item = { id, type, hash };
+            const pullStartedAt = Date.now();
             let boxed: Uint8Array;
             try {
-                boxed = await getRemoteBlob(adapter, hash);
+                boxed = await getRemoteBlob(adapter, hash, item);
             } catch (e) {
+                logPullFailure('request', item, pullStartedAt, e);
+                pullSkipped++;
                 if (isBlobMissingError(e)) {
-                    pullSkipped++;
-                    console.error(LOG_PREFIX, `Skipping pull ${id}: blob ${hash} not on server`, e);
                     toastr.warning(
                         `Skipped ${id} — missing on the server. Push from the device that still has it.`,
                         'TavernSync',
                     );
                     return;
                 }
-                throw e;
+                toastr.warning(`Skipped ${id} — download failed after retries.`, 'TavernSync');
+                return;
             }
             let plain: Uint8Array;
             try {
                 plain = await maybeDecrypt(boxed, hash);
             } catch (e) {
                 pullSkipped++;
-                console.error(LOG_PREFIX, `Skipping pull ${id}: decrypt/hash failed`, e);
+                logPullFailure('decrypt', item, pullStartedAt, e);
                 toastr.warning(
                     `Skipped ${id} — could not read server copy (wrong key or corrupt).`,
                     'TavernSync',
                 );
                 return;
             }
-            await storeBlob(hash, plain);
-            if (type === 'settings') {
-                settingsChanged = true;
-                const pulled = JSON.parse(new TextDecoder().decode(plain)) as Record<string, unknown>;
-                const raw = await stFetchJson<{ settings: string }>('/api/settings/get', {});
-                const full = JSON.parse(raw.settings || '{}') as Record<string, unknown>;
-                const merged = mergePulledSettings(full, pulled);
-                await applyLocalItem(id, type, new TextEncoder().encode(JSON.stringify(merged)), !!opts.dryRun);
-            } else {
-                if (type === 'persona') personasChanged = true;
-                await applyLocalItem(id, type, plain, !!opts.dryRun);
+            try {
+                await storeBlob(hash, plain);
+            } catch (e) {
+                pullSkipped++;
+                logPullFailure('store', item, pullStartedAt, e);
+                toastr.warning(`Skipped ${id} — could not store the downloaded copy.`, 'TavernSync');
+                return;
+            }
+            try {
+                if (type === 'settings') {
+                    const pulled = JSON.parse(new TextDecoder().decode(plain)) as Record<string, unknown>;
+                    const raw = await stFetchJson<{ settings: string }>('/api/settings/get', {});
+                    const full = JSON.parse(raw.settings || '{}') as Record<string, unknown>;
+                    const merged = mergePulledSettings(full, pulled);
+                    await applyLocalItem(id, type, new TextEncoder().encode(JSON.stringify(merged)), !!opts.dryRun);
+                    settingsChanged = true;
+                } else {
+                    await applyLocalItem(id, type, plain, !!opts.dryRun);
+                    if (type === 'persona') personasChanged = true;
+                }
+            } catch (e) {
+                pullSkipped++;
+                logPullFailure('apply', item, pullStartedAt, e);
+                toastr.warning(`Skipped ${id} — downloaded but could not apply it locally.`, 'TavernSync');
+                return;
             }
             pullAppliedIds.add(id);
         },

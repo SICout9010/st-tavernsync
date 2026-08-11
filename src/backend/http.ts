@@ -24,6 +24,118 @@ async function readError(res: Response): Promise<string> {
     }
 }
 
+function sleep(ms: number): Promise<void> {
+    return new Promise((r) => setTimeout(r, ms));
+}
+
+export type BlobFailureStage = 'request' | 'response-body';
+
+export interface BlobRequestContext {
+    itemId?: string;
+    itemType?: string;
+}
+
+export class BlobTransferError extends Error {
+    readonly operation: 'getBlob' | 'putBlob';
+    readonly stage: BlobFailureStage;
+    readonly hash: string;
+    readonly elapsedMs: number;
+    readonly status?: number;
+    readonly contentLength?: string;
+    readonly receivedBytes?: number;
+    readonly cfRay?: string;
+    readonly originalError: unknown;
+
+    constructor(meta: {
+        operation: 'getBlob' | 'putBlob';
+        stage: BlobFailureStage;
+        hash: string;
+        elapsedMs: number;
+        status?: number;
+        contentLength?: string | null;
+        receivedBytes?: number;
+        cfRay?: string | null;
+        cause: unknown;
+    }) {
+        const detail = meta.cause instanceof Error ? meta.cause.message : String(meta.cause);
+        super(`${meta.operation} ${meta.hash} failed at ${meta.stage}: ${detail}`);
+        this.name = 'BlobTransferError';
+        this.operation = meta.operation;
+        this.stage = meta.stage;
+        this.hash = meta.hash;
+        this.elapsedMs = meta.elapsedMs;
+        this.status = meta.status;
+        this.contentLength = meta.contentLength ?? undefined;
+        this.receivedBytes = meta.receivedBytes;
+        this.cfRay = meta.cfRay ?? undefined;
+        this.originalError = meta.cause;
+    }
+}
+
+function blobErrorMeta(error: unknown, context: BlobRequestContext = {}, attempt?: number) {
+    const e = error instanceof BlobTransferError ? error : undefined;
+    const original = e?.originalError instanceof Error ? e.originalError : error instanceof Error ? error : undefined;
+    return {
+        operation: e?.operation ?? 'getBlob',
+        stage: e?.stage ?? 'request',
+        hash: e?.hash,
+        itemId: context.itemId,
+        itemType: context.itemType,
+        attempt,
+        elapsedMs: e?.elapsedMs,
+        status: e?.status,
+        contentLength: e?.contentLength,
+        receivedBytes: e?.receivedBytes,
+        cfRay: e?.cfRay,
+        errorName: original?.name ?? typeof error,
+        errorMessage: original?.message ?? String(error),
+    };
+}
+
+/** Transient network / 5xx — retry. 404 and other client errors — don't. */
+function isRetryableBlobError(e: unknown): boolean {
+    if (e instanceof BlobTransferError) {
+        if (e.stage === 'response-body') return true;
+        if (e.status !== undefined) return e.status === 408 || e.status === 429 || e.status >= 500;
+        return true;
+    }
+    if (!(e instanceof Error)) return true;
+    const msg = e.message;
+    if (/\b404\b/.test(msg) || /not.?found/i.test(msg)) return false;
+    if (/\b(401|403|413)\b/.test(msg)) return false;
+    // iOS WKWebView: TypeError Load failed / Failed to fetch under parallel load
+    if (/load failed|failed to fetch|networkerror|aborted|timeout/i.test(msg)) return true;
+    if (/\b(408|429|500|502|503|504)\b/.test(msg)) return true;
+    // DOMException / TypeError without status → treat as flaky network
+    if (e.name === 'TypeError' || e.name === 'NetworkError' || e.name === 'AbortError') return true;
+    return false;
+}
+
+async function withBlobRetry<T>(
+    label: string,
+    fn: () => Promise<T>,
+    context: BlobRequestContext = {},
+    attempts = 3,
+): Promise<T> {
+    let last: unknown;
+    for (let attempt = 0; attempt < attempts; attempt++) {
+        try {
+            return await fn();
+        } catch (e) {
+            last = e;
+            if (!isRetryableBlobError(e) || attempt >= attempts - 1) throw e;
+            const baseDelay = 250 * 2 ** (attempt + 1);
+            const delay = Math.round(baseDelay * (0.75 + Math.random() * 0.5));
+            console.warn(LOG_PREFIX, `${label} failed; retry in ${delay}ms`, {
+                ...blobErrorMeta(e, context, attempt + 1),
+                retryDelayMs: delay,
+            });
+            await sleep(delay);
+        }
+    }
+    throw last;
+}
+
 export class HttpStorageAdapter implements StorageAdapter {
     constructor(private opts: HttpAdapterOptions) {}
 
@@ -79,29 +191,61 @@ export class HttpStorageAdapter implements StorageAdapter {
         return body.missing || [];
     }
 
-    async getBlob(hash: string): Promise<Uint8Array> {
-        const res = await fetch(this.url(`/v1/blobs/${encodeURIComponent(hash)}`), {
-            headers: { Authorization: `Bearer ${this.opts.deviceToken}` },
-        });
-        if (!res.ok) {
-            throw new Error(`getBlob ${hash}: ${res.status}`);
-        }
-        return new Uint8Array(await res.arrayBuffer());
+    async getBlob(hash: string, context: BlobRequestContext = {}): Promise<Uint8Array> {
+        return withBlobRetry(`getBlob ${hash.slice(0, 12)}`, async () => {
+            const startedAt = Date.now();
+            let res: Response;
+            try {
+                res = await fetch(this.url(`/v1/blobs/${encodeURIComponent(hash)}`), {
+                    headers: { Authorization: `Bearer ${this.opts.deviceToken}` },
+                });
+            } catch (cause) {
+                throw new BlobTransferError({
+                    operation: 'getBlob', stage: 'request', hash,
+                    elapsedMs: Date.now() - startedAt, cause,
+                });
+            }
+
+            const responseMeta = {
+                status: res.status,
+                contentLength: res.headers.get('Content-Length'),
+                cfRay: res.headers.get('cf-ray'),
+            };
+            if (!res.ok) {
+                throw new BlobTransferError({
+                    operation: 'getBlob', stage: 'request', hash,
+                    elapsedMs: Date.now() - startedAt, ...responseMeta,
+                    cause: new Error(`HTTP ${res.status} ${res.statusText}`.trim()),
+                });
+            }
+
+            try {
+                const bytes = new Uint8Array(await res.arrayBuffer());
+                return bytes;
+            } catch (cause) {
+                throw new BlobTransferError({
+                    operation: 'getBlob', stage: 'response-body', hash,
+                    elapsedMs: Date.now() - startedAt, ...responseMeta, cause,
+                });
+            }
+        }, context);
     }
 
     async putBlob(hash: string, data: Uint8Array): Promise<void> {
-        const res = await fetch(this.url(`/v1/blobs/${encodeURIComponent(hash)}`), {
-            method: 'PUT',
-            headers: {
-                Authorization: `Bearer ${this.opts.deviceToken}`,
-                'Content-Type': 'application/octet-stream',
-            },
-            body: data as unknown as BodyInit,
+        await withBlobRetry(`putBlob ${hash.slice(0, 12)}`, async () => {
+            const res = await fetch(this.url(`/v1/blobs/${encodeURIComponent(hash)}`), {
+                method: 'PUT',
+                headers: {
+                    Authorization: `Bearer ${this.opts.deviceToken}`,
+                    'Content-Type': 'application/octet-stream',
+                },
+                body: data as unknown as BodyInit,
+            });
+            if (!res.ok) {
+                console.error(LOG_PREFIX, 'putBlob failed', hash, res.status);
+                throw new Error(`putBlob ${hash}: ${res.status}`);
+            }
         });
-        if (!res.ok) {
-            console.error(LOG_PREFIX, 'putBlob failed', hash, res.status);
-            throw new Error(`putBlob ${hash}: ${res.status}`);
-        }
     }
 
     async quota(): Promise<{ usedBytes: number; limitBytes: number; itemCount: number }> {
@@ -167,16 +311,7 @@ export async function uploadBlobsParallel(
 
     await mapPool(missing, concurrency, async (hash) => {
         const data = await load(hash);
-        let attempt = 0;
-        for (;;) {
-            try {
-                await adapter.putBlob(hash, data);
-                return;
-            } catch (e) {
-                attempt++;
-                if (attempt >= 3) throw e;
-                await new Promise((r) => setTimeout(r, 250 * 2 ** attempt));
-            }
-        }
+        // putBlob already retries transient failures
+        await adapter.putBlob(hash, data);
     });
 }

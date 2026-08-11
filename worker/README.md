@@ -56,3 +56,4 @@ Fallback: if only legacy `DEFAULT_QUOTA_BYTES` is set, it is used as the storage
 ## Other limits
 
 - Blob ≤ 25 MB, manifest ≤ 2 MB
+- Paid Workers: `limits.subrequests` **10_000**, `limits.cpu_ms` **300_000** (5 min). Free plan ~50 subrequests — large `/v1/blobs/check` will 500 there.
