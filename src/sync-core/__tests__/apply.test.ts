@@ -10,6 +10,7 @@ function baseCtx(over: Partial<ApplyContext> = {}): ApplyContext {
         pullAndApply: vi.fn(async () => undefined),
         keepBoth: vi.fn(async () => undefined),
         tombstone: vi.fn(async () => undefined),
+        deleteLocal: vi.fn(async () => undefined),
         ...over,
     };
 }
@@ -60,5 +61,16 @@ describe('applyOp batch push', () => {
         await applyOp(ops, baseCtx({ pullAndApply, concurrency: 3 }));
         expect(pullAndApply).toHaveBeenCalledTimes(3);
         expect(maxInflight).toBeGreaterThan(1);
+    });
+
+    it('calls deleteLocal for delete_local ops', async () => {
+        const deleteLocal = vi.fn(async () => undefined);
+        const ops: ApplyOp[] = [
+            { id: 'chat/A.png/old', kind: 'delete_local', type: 'chat' },
+            { id: 'chat/A.png/new', kind: 'pull_blob', type: 'chat', hash: 'h2' },
+        ];
+        const result = await applyOp(ops, baseCtx({ deleteLocal }));
+        expect(deleteLocal).toHaveBeenCalledWith('chat/A.png/old', 'chat');
+        expect(result.done).toBe(2);
     });
 });

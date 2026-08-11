@@ -113,6 +113,126 @@ export async function writePersona(payload: PersonaPayload): Promise<void> {
     await writeSettings(full);
 }
 
+export async function deleteChat(avatarUrl: string, fileName: string): Promise<void> {
+    const chatfile = fileName.toLowerCase().endsWith('.jsonl') ? fileName : `${fileName}.jsonl`;
+    await stFetchJson('/api/chats/delete', { avatar_url: avatarUrl, chatfile });
+}
+
+export async function deleteGroupChat(id: string): Promise<void> {
+    await stFetchJson('/api/chats/group/delete', { id });
+}
+
+export async function deleteWorldInfo(name: string): Promise<void> {
+    await stFetchJson('/api/worldinfo/delete', { name });
+}
+
+export async function deletePreset(apiId: string, name: string): Promise<void> {
+    await stFetchJson('/api/presets/delete', { apiId, name });
+}
+
+export async function deleteCharacter(avatarUrl: string): Promise<void> {
+    // Do not cascade chats — they sync as separate items.
+    await stFetchJson('/api/characters/delete', { avatar_url: avatarUrl, delete_chats: false });
+}
+
+export async function deleteGroup(id: string): Promise<void> {
+    await stFetchJson('/api/groups/delete', { id });
+}
+
+export async function deleteTheme(name: string): Promise<void> {
+    await stFetchJson('/api/themes/delete', { name });
+}
+
+export async function deleteQuickReply(name: string): Promise<void> {
+    await stFetchJson('/api/quick-replies/delete', { name });
+}
+
+export async function deletePersona(avatarId: string): Promise<void> {
+    try {
+        await stFetchJson('/api/avatars/delete', { avatar: avatarId });
+    } catch (e) {
+        console.warn(LOG_PREFIX, 'persona avatar delete failed (may already be gone)', avatarId, e);
+    }
+    const raw = await stFetchJson<{ settings: string }>('/api/settings/get', {});
+    const full = JSON.parse(raw.settings || '{}') as Record<string, unknown>;
+    if (!full.power_user || typeof full.power_user !== 'object') return;
+    const power = full.power_user as Record<string, unknown>;
+    const personas = (power.personas && typeof power.personas === 'object'
+        ? { ...(power.personas as Record<string, string>) }
+        : {}) as Record<string, string>;
+    const descriptions = (power.persona_descriptions && typeof power.persona_descriptions === 'object'
+        ? { ...(power.persona_descriptions as Record<string, Record<string, unknown>>) }
+        : {}) as Record<string, Record<string, unknown>>;
+    delete personas[avatarId];
+    delete descriptions[avatarId];
+    power.personas = personas;
+    power.persona_descriptions = descriptions;
+    await writeSettings(full);
+}
+
+/**
+ * Delete a synced item from local ST.
+ * Returns false if this type must not be auto-deleted (e.g. settings).
+ */
+export async function deleteLocalItem(
+    id: string,
+    type: ItemType,
+    dryRun: boolean,
+): Promise<boolean> {
+    const { parts } = parseItemId(id);
+    console.log(LOG_PREFIX, dryRun ? 'dry-run delete' : 'delete', id, type);
+
+    if (type === 'settings') {
+        console.warn(LOG_PREFIX, 'Refusing to auto-delete settings', id);
+        return false;
+    }
+
+    if (dryRun) return true;
+
+    switch (type) {
+        case 'chat': {
+            await deleteChat(parts[0], parts.slice(1).join('/'));
+            return true;
+        }
+        case 'groupchat': {
+            await deleteGroupChat(parts.join('/'));
+            return true;
+        }
+        case 'worldinfo': {
+            await deleteWorldInfo(parts.join('/'));
+            return true;
+        }
+        case 'preset': {
+            const [apiId, ...nameParts] = parts;
+            await deletePreset(apiId, nameParts.join('/'));
+            return true;
+        }
+        case 'character': {
+            await deleteCharacter(parts.join('/'));
+            return true;
+        }
+        case 'group': {
+            await deleteGroup(parts.join('/'));
+            return true;
+        }
+        case 'persona': {
+            await deletePersona(parts.join('/'));
+            return true;
+        }
+        case 'theme': {
+            await deleteTheme(parts.join('/'));
+            return true;
+        }
+        case 'quickreply': {
+            await deleteQuickReply(parts.join('/'));
+            return true;
+        }
+        default:
+            console.warn(LOG_PREFIX, `No delete path for type ${type} (${id})`);
+            return false;
+    }
+}
+
 export function parseItemId(id: string): { type: ItemType; parts: string[] } {
     const [type, ...rest] = id.split('/');
     return { type: type as ItemType, parts: rest };

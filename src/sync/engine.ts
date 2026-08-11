@@ -7,7 +7,7 @@ import { HttpStorageAdapter, uploadBlobsParallel } from '../backend/http';
 import { decodeSalt, deriveKey, encodeSalt, exportKeyRaw, importAesKey, open, seal } from '../crypto';
 import { LOG_PREFIX, getSettings, saveSettings, type SyncScopeSettings } from '../settings';
 import { loadBlob, loadLocalManifest, scanLocal, storeBlob } from '../st-adapter/scan';
-import { applyLocalItem, decodeUtf8Jsonl, parseItemId, writeChat } from '../st-adapter/write';
+import { applyLocalItem, decodeUtf8Jsonl, deleteLocalItem, parseItemId, writeChat } from '../st-adapter/write';
 import { stFetchJson } from '../st-adapter/http';
 import { conflictSiblingId, tryChatFastForward } from '../sync-core/conflict';
 import { diffManifests, summarizeDiff } from '../sync-core/diff';
@@ -579,6 +579,8 @@ export async function runSync(opts: SyncRunOptions): Promise<{ message: string }
     let settingsChanged = false;
     let personasChanged = false;
     const pullAppliedIds = new Set<string>();
+    const deleteAppliedIds = new Set<string>();
+    const remoteDeleteEntries = entries.filter((e) => e.action === 'remote_delete');
     let pullSkipped = 0;
 
     await applyOp(plan, {
@@ -699,6 +701,28 @@ export async function runSync(opts: SyncRunOptions): Promise<{ message: string }
             // Mark deleted on remote by pushing manifest without item — handled by rebuild below
             console.log(LOG_PREFIX, 'tombstone', id);
         },
+        deleteLocal: async (id, type) => {
+            try {
+                const ok = await deleteLocalItem(id, type, !!opts.dryRun);
+                if (ok) {
+                    deleteAppliedIds.add(id);
+                    if (type === 'persona') personasChanged = true;
+                    if (type === 'settings') settingsChanged = true;
+                } else {
+                    console.warn(LOG_PREFIX, 'remote delete not applied locally', id, type);
+                    toastr.warning(
+                        `Could not delete ${id} on this device (type not auto-deletable).`,
+                        'TavernSync',
+                    );
+                }
+            } catch (e) {
+                console.error(LOG_PREFIX, 'deleteLocal failed', id, e);
+                toastr.warning(
+                    `Failed to delete ${id} on this device. It may come back on the next Push.`,
+                    'TavernSync',
+                );
+            }
+        },
     });
 
     // Rebuild remote manifest from intended end state
@@ -752,7 +776,22 @@ export async function runSync(opts: SyncRunOptions): Promise<{ message: string }
 
         try {
             const { version } = await adapter.putManifest(newManifest, remoteVersion);
+            // Keep declined remote_deletes in base so a later Push won't resurrect them as push_new.
+            const declined = remoteDeleteEntries.filter((e) => !deleteAppliedIds.has(e.id));
+            if (declined.length) {
+                const items = { ...newManifest.items };
+                for (const e of declined) {
+                    if (e.base) items[e.id] = e.base;
+                }
+                newManifest.items = items;
+            }
             await saveBase({ manifest: newManifest, syncedAt: Date.now(), remoteVersion: version });
+            if (deleteAppliedIds.size) {
+                toastr.info(
+                    `Removed ${deleteAppliedIds.size} item(s) deleted on another device.`,
+                    'TavernSync',
+                );
+            }
         } catch (err) {
             if (err instanceof ConflictError) {
                 progress('412 conflict — re-diff once…');
@@ -765,6 +804,10 @@ export async function runSync(opts: SyncRunOptions): Promise<{ message: string }
         }
     } else if (!opts.dryRun && opts.direction === 'pull') {
         if (remote) {
+            // remote_delete ids we did NOT remove locally must stay in base, otherwise
+            // the next Push classifies them as push_new and resurrects them on the server.
+            const declinedDeletes = remoteDeleteEntries.filter((e) => !deleteAppliedIds.has(e.id));
+
             if (pullSkipped > 0) {
                 // Do NOT adopt full remote as base — that makes an incomplete device look "synced"
                 // and a later Push can overwrite the server with partial data.
@@ -773,6 +816,9 @@ export async function runSync(opts: SyncRunOptions): Promise<{ message: string }
                 for (const id of pullAppliedIds) {
                     const item = remote.items[id];
                     if (item) mergedItems[id] = item;
+                }
+                for (const id of deleteAppliedIds) {
+                    delete mergedItems[id];
                 }
                 await saveBase({
                     manifest: {
@@ -790,7 +836,26 @@ export async function runSync(opts: SyncRunOptions): Promise<{ message: string }
                     { timeOut: 12000 },
                 );
             } else {
-                await saveBase({ manifest: remote, syncedAt: Date.now(), remoteVersion });
+                const items: Record<string, SyncItem> = { ...remote.items };
+                for (const e of declinedDeletes) {
+                    if (e.base) items[e.id] = e.base;
+                }
+                await saveBase({
+                    manifest: {
+                        ...remote,
+                        items,
+                        updatedAt: Date.now(),
+                    },
+                    syncedAt: Date.now(),
+                    remoteVersion,
+                });
+            }
+
+            if (deleteAppliedIds.size) {
+                toastr.info(
+                    `Removed ${deleteAppliedIds.size} item(s) deleted on another device.`,
+                    'TavernSync',
+                );
             }
         }
     }

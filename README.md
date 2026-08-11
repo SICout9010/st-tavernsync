@@ -108,7 +108,7 @@ Settings · Characters · Chats · Lorebooks · Presets · Personas · Groups ·
 
 **คีย์ API ของโมเดลจะไม่ถูกซิงก์** — ตั้งใจตัดออก
 
-“Delete on other devices too” **ปิดเป็นค่าเริ่มต้น** — เปิดเมื่อตั้งใจลบจริง ๆ เท่านั้น
+“Delete on other devices too” **ปิดเป็นค่าเริ่มต้น** — เปิดแล้ว Push จะเอาออกจากเซิร์ฟเวอร์ และ Pull จะลบไฟล์ในเครื่องนี้ด้วย (ยกเว้น settings)
 
 ## ถ้าพัง
 

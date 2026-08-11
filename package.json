@@ -1,13 +1,14 @@
 {
   "name": "st-tavernsync",
   "type": "module",
-  "version": "0.1.11",
+  "version": "0.1.12",
   "private": true,
   "description": "SillyTavern cross-device sync extension (TavernSync)",
   "scripts": {
     "build": "webpack --mode production",
     "build:dev": "webpack --mode development",
     "test": "vitest run",
+    "test:bench": "vitest run src/backend/__tests__/upload.500mb.bench.test.ts",
     "test:watch": "vitest",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix"

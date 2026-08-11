@@ -53,6 +53,7 @@ export type ApplyOpKind =
     | 'pull_blob'
     | 'apply_local'
     | 'tombstone'
+    | 'delete_local'
     | 'keep_both'
     | 'skip';
 

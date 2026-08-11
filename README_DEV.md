@@ -132,7 +132,7 @@ Quiet rescan on expanding the top-level TavernSync drawer (`inline-drawer-toggle
 - Strip `extensionSettings.tavernsync`, `power_user.personas` / `persona_descriptions` (personas sync as `persona/*`), and secret-like keys (`st-adapter/normalize.ts`)
 - E2EE: PBKDF2 ≥600k, AES-GCM (IV prepended)
 - Personas: image under `User Avatars/` + metadata; apply via `/api/avatars/upload` + settings merge
-- Deletion propagation is opt-in; remote deletes are not auto-applied in v1
+- Deletion propagation is opt-in (`propagateDeletes`): Push removes from remote manifest; Pull applies `delete_local` (chats, characters, lorebooks, …). Settings are never auto-deleted. Declined/failed deletes stay in base to block `push_new` resurrection.
 
 ## Known gaps
 

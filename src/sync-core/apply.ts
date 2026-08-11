@@ -17,6 +17,8 @@ export interface ApplyContext {
     pullAndApply: (id: string, type: ApplyOp['type'], hash: string) => Promise<void>;
     keepBoth: (id: string, type: ApplyOp['type']) => Promise<void>;
     tombstone: (id: string) => Promise<void>;
+    /** Apply a remote delete onto this device (propagateDeletes). */
+    deleteLocal: (id: string, type: ApplyOp['type']) => Promise<void>;
     /** Max parallel pull/keep_both within a type group. Default 4. */
     concurrency?: number;
 }
@@ -60,6 +62,9 @@ export async function applyOp(ops: ApplyOp[], ctx: ApplyContext): Promise<{ done
                     break;
                 case 'tombstone':
                     await ctx.tombstone(op.id);
+                    break;
+                case 'delete_local':
+                    await ctx.deleteLocal(op.id, op.type);
                     break;
                 case 'apply_local':
                     await ctx.pullAndApply(op.id, op.type, op.hash!);

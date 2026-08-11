@@ -119,7 +119,7 @@ describe('conflictSiblingId', () => {
 });
 
 describe('buildPlan', () => {
-    it('maps push/pull/conflict and skips remote deletes', () => {
+    it('maps push/pull/conflict and skips remote deletes when propagate off', () => {
         const ops = buildPlan(
             [
                 { id: 'a', action: 'push', type: 'worldinfo', local: item('a', 'h1') },
@@ -133,5 +133,25 @@ describe('buildPlan', () => {
         expect(ops.find((o) => o.id === 'b')?.kind).toBe('pull_blob');
         expect(ops.find((o) => o.id === 'c')?.kind).toBe('keep_both');
         expect(ops.find((o) => o.id === 'd')?.kind).toBe('skip');
+    });
+
+    it('maps remote_delete to delete_local when propagateDeletes is on', () => {
+        const ops = buildPlan(
+            [
+                { id: 'chat/A.png/old', action: 'remote_delete', type: 'chat', base: item('chat/A.png/old', 'h0', 'chat'), local: item('chat/A.png/old', 'h0', 'chat') },
+                { id: 'chat/A.png/new', action: 'pull_new', type: 'chat', remote: item('chat/A.png/new', 'h1', 'chat') },
+            ],
+            { propagateDeletes: true },
+        );
+        expect(ops.find((o) => o.id === 'chat/A.png/old')?.kind).toBe('delete_local');
+        expect(ops.find((o) => o.id === 'chat/A.png/new')?.kind).toBe('pull_blob');
+    });
+
+    it('maps local_delete to tombstone when propagateDeletes is on', () => {
+        const ops = buildPlan(
+            [{ id: 'chat/A.png/old', action: 'local_delete', type: 'chat', base: item('chat/A.png/old', 'h0', 'chat') }],
+            { propagateDeletes: true },
+        );
+        expect(ops[0]?.kind).toBe('tombstone');
     });
 });

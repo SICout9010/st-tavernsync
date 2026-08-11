@@ -67,13 +67,21 @@ export function buildPlan(entries: DiffEntry[], opts: PlanOptions): ApplyOp[] {
                 }
                 break;
             case 'remote_delete':
-                // Never auto-apply in v1
-                ops.push({
-                    id: e.id,
-                    kind: 'skip',
-                    type: e.type || e.base!.type,
-                    meta: { reason: 'remote_delete_needs_confirm' },
-                });
+                if (opts.propagateDeletes) {
+                    ops.push({
+                        id: e.id,
+                        kind: 'delete_local',
+                        type: e.type || e.base!.type || e.local!.type,
+                        meta: { side: 'local', hash: e.local?.hash || e.base?.hash },
+                    });
+                } else {
+                    ops.push({
+                        id: e.id,
+                        kind: 'skip',
+                        type: e.type || e.base!.type,
+                        meta: { reason: 'remote_delete_not_propagated' },
+                    });
+                }
                 break;
         }
     }

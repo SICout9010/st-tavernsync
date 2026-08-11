@@ -108,7 +108,7 @@ Settings · Characters · Chats · Lorebooks · Presets · Personas · Groups ·
 
 **Model API keys are never synced** — on purpose.
 
-**Delete on other devices too** stays **off** by default.
+**Delete on other devices too** stays **off** by default. When on, Push drops items from the server manifest and Pull deletes them on this device (settings are never auto-deleted).
 
 ## If something breaks
 
